@@ -1,0 +1,97 @@
+name: Reusable UPM Pack & Publish
+
+on:
+  workflow_call:
+    inputs:
+      registry-url:
+        required: false
+        type: string
+        default: 'http://<SERVER_IP_OR_HOSTNAME>:4873'
+    secrets:
+      UPM_SERVICE_ACCOUNT_KEY_ID:
+        required: true
+      UPM_SERVICE_ACCOUNT_KEY_SECRET:
+        required: true
+      UPM_ORGANIZATION_ID:
+        required: true
+      VERDACCIO_TOKEN:
+        required: true
+
+jobs:
+  build-and-publish:
+    runs-on: [self-hosted, Windows, X64, upm-runner]
+    
+    steps:
+      - name: Checkout Package Repository
+        uses: actions/checkout@v4
+
+      - name: Fetch Master Templates from .github Repo
+        uses: actions/checkout@v4
+        with:
+          repository: 'SchellGamesInternal/.github'
+          path: '.org-configs'
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Inject Central .npmignore & publishConfig
+        shell: powershell
+        run: |
+          # 1. Overwrite/Inject master .npmignore into workspace root
+          Copy-Item -Path ".org-configs/templates/.npmignore" -Destination ".npmignore" -Force
+          Write-Host "Injected central .npmignore template."
+
+          # 2. Dynamically inject publishConfig registry target into package.json
+          $registryUrl = "${{ inputs.registry-url }}".TrimEnd('/')
+          $json = Get-Content "package.json" -Raw | ConvertFrom-Json
+          if (-not $json.PSObject.Properties['publishConfig']) {
+            $prop = [PSCustomObject]@{ registry = "$registryUrl/" }
+            $json | Add-Member -MemberType NoteProperty -Name "publishConfig" -Value $prop
+          } else {
+            $json.publishConfig.registry = "$registryUrl/"
+          }
+          $updatedJson =$json | ConvertTo-Json -Depth 10
+          [System.IO.File]::WriteAllText((Get-Item "package.json").FullName, $updatedJson)
+          Write-Host "Injected publishConfig ($registryUrl/) into package.json."
+
+          # 3. Clean up cloned template path prior to packaging
+          Remove-Item -Path ".org-configs" -Recurse -Force
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Determine NPM Release Tag
+        shell: powershell
+        run: |
+          $ref = "${{ github.ref_name }}"
+          if ($ref -match "-(preview|alpha|beta|rc)") { $tag =$Matches[1] }
+          elseif ($ref -match "^v?\d+\.\d+\.\d+$") { $tag = "latest" }
+          else { $tag = "preview" }
+          Add-Content -Path $env:GITHUB_ENV -Value "NPM_TAG=$tag"
+          Write-Host "Assigned NPM publish tag: $tag"
+
+      - name: Pack Package via Unity UPM CLI
+        shell: powershell
+        env:
+          UPM_SERVICE_ACCOUNT_KEY_ID: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_ID }}
+          UPM_SERVICE_ACCOUNT_KEY_SECRET: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_SECRET }}
+          UPM_ORGANIZATION_ID: ${{ secrets.UPM_ORGANIZATION_ID }}
+        run: |
+          # Clean up any residual .tgz files in parent workspace directory
+          Remove-Item -Path "..\*.tgz" -Force -ErrorAction SilentlyContinue
+          & "C:\upm\bin\upm.exe" pack . --organization-id $env:UPM_ORGANIZATION_ID --destination ..
+
+      - name: Authenticate & Publish to Verdaccio
+        shell: powershell
+        run: |
+          $registryUrl = "${{ inputs.registry-url }}".TrimEnd('/')
+          $cleanUrl =$registryUrl -replace "https?://", ""
+          
+          Set-Content -Path ".npmrc" -Value "//${cleanUrl}/:_authToken=`"${{ secrets.VERDACCIO_TOKEN }}`""
+          
+          $tgzFile = Get-ChildItem -Path ".." -Filter "*.tgz" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($null -eq$tgzFile) {
+            Write-Error "No .tgz package file found in parent directory!"
+            exit 1
+          }
+          npm publish "$($tgzFile.FullName)" --registry "$registryUrl/" --tag "$env:NPM_TAG"

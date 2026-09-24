@@ -1,0 +1,31 @@
+# Exclude Git & GitHub administration files
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Exclude local Unity project workspace artifacts
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+
+# Exclude IDE & Build Tool Files
+.vs/
+.idea/
+*.sln
+*.csproj
+*.unityproj
+
+# CRITICAL: Re-include all Unity YAML metadata files FIRST
+!*.meta
+
+# Exclude Automated Test Framework Assemblies & Metadata
+/Tests/
+/Tests.meta
+*.Tests/
+*.Tests.meta
