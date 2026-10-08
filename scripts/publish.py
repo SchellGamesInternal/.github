@@ -56,7 +56,7 @@ def main():
     print("=========================================\n")
 
     verdaccio_url = get_env_var("VERDACCIO_URL", required=True).rstrip('/')
-    verdaccio_token = get_env_var("VERDACCIO_TOKEN", required=True)
+    verdaccio_token = get_env_var("VERDACCIO_TOKEN", required=True).strip()
     upm_org_id = os.getenv("UPM_ORGANIZATION_ID", "")
     git_ref = os.getenv("GITHUB_REF_NAME", "")
 
@@ -131,22 +131,20 @@ def main():
 
     # 6. Authenticate & Publish to Verdaccio
     clean_url = re.sub(r'^https?://', '', verdaccio_url)
-    npmrc_path = Path(".npmrc")
 
-    # Smart credential resolution
-    if ":" in verdaccio_token:
-        # Provided as raw 'username:password' -> convert to base64 _auth
+    # If raw 'username:password' is passed, encode it to Base64 _auth
+    if ":" in verdaccio_token and not verdaccio_token.startswith("http"):
         b64_auth = base64.b64encode(verdaccio_token.encode("utf-8")).decode("utf-8")
-        npmrc_content = f"//{clean_url}/:_auth={b64_auth}\n//{clean_url}/:always-auth=true\n"
+        auth_entry = f"//{clean_url}/:_auth={b64_auth}"
     else:
-        # Standard token format (writes both _authToken and _auth for max compatibility)
-        npmrc_content = (
-            f"//{clean_url}/:_authToken={verdaccio_token}\n"
-            f"//{clean_url}/:_auth={verdaccio_token}\n"
-            f"//{clean_url}/:always-auth=true\n"
-        )
+        # Standard Verdaccio Bearer Token (_authToken only)
+        auth_entry = f"//{clean_url}/:_authToken={verdaccio_token}"
 
-    npmrc_path.write_text(npmrc_content, encoding="utf-8")
+    npmrc_content = f"{auth_entry}\n//{clean_url}/:always-auth=true\n"
+
+    # Write .npmrc in workspace root
+    local_npmrc = Path(".npmrc")
+    local_npmrc.write_text(npmrc_content, encoding="utf-8")
 
     if not npm_bin:
         print("Error: 'npm' executable not found for publish step.")
@@ -162,9 +160,9 @@ def main():
     print(f"--> Publishing {artifact_path.name} to Verdaccio...")
     publish_result = subprocess.run(publish_cmd)
 
-    # Clean up temporary .npmrc credential file
-    if npmrc_path.exists():
-        npmrc_path.unlink()
+    # Clean up temporary credential file
+    if local_npmrc.exists():
+        local_npmrc.unlink()
 
     if publish_result.returncode != 0:
         print("Error: Failed to publish package to Verdaccio registry.")
