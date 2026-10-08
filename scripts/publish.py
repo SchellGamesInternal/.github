@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import sys
 import json
@@ -6,126 +7,156 @@ import shutil
 import subprocess
 from pathlib import Path
 
-def resolve_binary(cmd_name_or_path):
-    """Resolves executable paths across Linux and Windows environments."""
-    if os.path.isfile(cmd_name_or_path):
-        return cmd_name_or_path
+def get_env_var(name, required=True, default=None):
+    val = os.getenv(name, default)
+    if required and not val:
+        print(f"Error: Missing required environment variable: {name}")
+        sys.exit(1)
+    return val
 
-    base, ext = os.path.splitext(cmd_name_or_path)
-    candidates = []
+def resolve_cmd(binary_name):
+    """Resolves binary name to full path (handles npm.cmd / upm.exe on Windows)."""
+    return shutil.which(binary_name)
 
-    if sys.platform == "win32":
-        if ext:
-            candidates.extend([cmd_name_or_path, f"{base}.cmd", f"{base}.exe", f"{base}.bat"])
-        else:
-            candidates.extend([f"{cmd_name_or_path}.cmd", f"{cmd_name_or_path}.exe", f"{cmd_name_or_path}.bat", cmd_name_or_path])
-    else:
-        candidates.append(cmd_name_or_path)
+def find_upm_binary():
+    """Searches standard system and user paths across Linux and Windows."""
+    candidates = [
+        # Linux / macOS
+        "/opt/upm/bin/upm",
+        "/usr/local/bin/upm",
+        "/usr/bin/upm",
+        os.path.expanduser("~/.local/bin/upm"),
+        # Windows
+        r"C:\upm\bin\upm.exe",
+        r"C:\Program Files\Unity\upm\bin\upm.exe",
+    ]
+    for path in candidates:
+        if os.path.isfile(path) and (os.access(path, os.X_OK) or path.endswith(".exe")):
+            return path
 
-    for candidate in candidates:
-        if os.path.isfile(candidate):
-            return candidate
+    return resolve_cmd("upm")
 
-    for candidate in candidates:
-        found = shutil.which(candidate)
-        if found:
-            return found
+def determine_npm_tag(ref_name):
+    if not ref_name:
+        return "latest"
 
-    if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA", "")
-        if appdata:
-            npm_global = os.path.join(appdata, "npm", f"{os.path.basename(base)}.cmd")
-            if os.path.isfile(npm_global):
-                return npm_global
+    match = re.search(r'-(preview|alpha|beta|rc)', ref_name, re.IGNORECASE)
+    if match:
+        return match.group(1).lower()
 
-    return cmd_name_or_path
+    if re.match(r'^v?\d+\.\d+\.\d+$', ref_name):
+        return "latest"
+
+    return "preview"
 
 def main():
-    registry_url = os.environ.get("REGISTRY_URL", "").rstrip("/")
-    org_id = os.environ.get("UPM_ORGANIZATION_ID", "")
-    verdaccio_token = os.environ.get("VERDACCIO_TOKEN", "")
-    github_ref = os.environ.get("GITHUB_REF_NAME", "")
+    print("=========================================")
+    print("  Unity UPM Central Publishing Engine   ")
+    print("=========================================\n")
 
-    # 1. Detect OS & Resolve UPM Executable Path
-    if sys.platform == "win32":
-        default_upm = r"C:\upm\bin\upm"
-    else:
-        default_upm = "/opt/upm/bin/upm"
+    verdaccio_url = get_env_var("VERDACCIO_URL", required=True).rstrip('/')
+    verdaccio_token = get_env_var("VERDACCIO_TOKEN", required=True)
+    upm_org_id = os.getenv("UPM_ORGANIZATION_ID", "")
+    git_ref = os.getenv("GITHUB_REF_NAME", "")
 
-    upm_path = resolve_binary(default_upm)
-    if not os.path.isfile(upm_path):
-        upm_path = resolve_binary("upm")
+    npm_tag = determine_npm_tag(git_ref)
+    print(f"--> Target Registry: {verdaccio_url}")
+    print(f"--> Assigned NPM Release Tag: {npm_tag}")
 
-    print(f"--> Operating System: {sys.platform}")
-    print(f"--> Resolved UPM Executable: {upm_path}")
+    # Inject Master Template .npmignore
+    template_ignore = Path(".org-configs/templates/.npmignore")
+    if template_ignore.exists():
+        shutil.copy(template_ignore, ".npmignore")
+        print("--> Injected master .npmignore template.")
 
-    if not os.path.isfile(upm_path) and not shutil.which(upm_path):
-        print(f"Error: Could not locate UPM CLI binary on system! Checked path: '{upm_path}'", file=sys.stderr)
+    # Inject publishConfig into package.json
+    pkg_path = Path("package.json")
+    if not pkg_path.exists():
+        print("Error: package.json not found in repository root!")
         sys.exit(1)
 
-    # 2. Inject central .npmignore template
-    template_npmignore = Path(".org-configs/templates/.npmignore")
-    if template_npmignore.exists():
-        shutil.copyfile(template_npmignore, ".npmignore")
-        print("--> Injected central .npmignore template.")
+    with open(pkg_path, "r", encoding="utf-8") as f:
+        pkg_data = json.load(f)
 
-    # 3. Inject publishConfig registry target into package.json
-    pkg_json_path = Path("package.json")
-    if pkg_json_path.exists():
-        with open(pkg_json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if "publishConfig" not in data or not isinstance(data["publishConfig"], dict):
-            data["publishConfig"] = {}
-        data["publishConfig"]["registry"] = f"{registry_url}/"
-        with open(pkg_json_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        print(f"--> Injected publishConfig ({registry_url}/) into package.json")
+    if "publishConfig" not in pkg_data or not isinstance(pkg_data["publishConfig"], dict):
+        pkg_data["publishConfig"] = {}
 
-    # 4. Clean up cloned central configs directory prior to packaging
-    if Path(".org-configs").exists():
-        shutil.rmtree(".org-configs", ignore_errors=True)
+    pkg_data["publishConfig"]["registry"] = f"{verdaccio_url}/"
 
-    # 5. Determine NPM Release Tag based on Git reference
-    match = re.search(r"-(preview|alpha|beta|rc)", github_ref)
-    if match:
-        npm_tag = match.group(1)
-    elif re.match(r"^v?\d+\.\d+\.\d+$", github_ref):
-        npm_tag = "latest"
-    else:
-        npm_tag = "preview"
-    print(f"--> Assigned NPM publish tag: {npm_tag}")
+    with open(pkg_path, "w", encoding="utf-8") as f:
+        json.dump(pkg_data, f, indent=2)
+    print(f"--> Injected publishConfig ({verdaccio_url}/) into package.json.")
 
-    # 6. Clean residual .tgz files & pack via Unity UPM CLI
+    # Clean up existing .tgz artifacts
     parent_dir = Path("..")
-    for tgz in parent_dir.glob("*.tgz"):
+    for tgz_file in parent_dir.glob("*.tgz"):
         try:
-            tgz.unlink()
-        except Exception:
+            tgz_file.unlink()
+        except OSError:
             pass
 
-    pack_cmd = [upm_path, "pack", ".", "--organization-id", org_id, "--destination", ".."]
-    use_upm_shell = sys.platform == "win32" and upm_path.lower().endswith((".cmd", ".bat"))
-    print(f"--> Packing package with: {upm_path}...")
-    subprocess.run(pack_cmd, check=True, shell=use_upm_shell)
+    # Pack Package
+    upm_bin = find_upm_binary()
+    npm_bin = resolve_cmd("npm")
 
-    # 7. Authenticate & Publish to Verdaccio
-    clean_url = re.sub(r"^https?://", "", registry_url)
-    with open(".npmrc", "w", encoding="utf-8") as f:
-        f.write(f'//{clean_url}/:_authToken="{verdaccio_token}"\n')
+    if upm_bin:
+        print(f"--> Packaging using Unity UPM CLI: {upm_bin}")
+        cmd = [upm_bin, "pack", ".", "--destination", ".."]
+        if upm_org_id:
+            cmd.extend(["--organization-id", upm_org_id])
 
-    tgz_files = sorted(parent_dir.glob("*.tgz"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not tgz_files:
-        print("Error: No .tgz package file found in parent directory!", file=sys.stderr)
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            print("Error: Unity UPM pack operation failed.")
+            sys.exit(result.returncode)
+    elif npm_bin:
+        print("--> WARNING: Unity UPM CLI not found. Falling back to 'npm pack'...")
+        result = subprocess.run([npm_bin, "pack", "--pack-destination", ".."])
+        if result.returncode != 0:
+            print("Error: 'npm pack' fallback failed.")
+            sys.exit(result.returncode)
+    else:
+        print("Error: Neither Unity 'upm' CLI nor 'npm' executable could be found on system.")
         sys.exit(1)
 
-    target_tgz = tgz_files[0]
-    npm_bin = resolve_binary("npm")
-    pub_cmd = [npm_bin, "publish", str(target_tgz), "--registry", f"{registry_url}/", "--tag", npm_tag]
-    use_npm_shell = sys.platform == "win32" and npm_bin.lower().endswith((".cmd", ".bat"))
+    # Locate Packaged Tarball
+    tgz_files = sorted(parent_dir.glob("*.tgz"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not tgz_files:
+        print("Error: No packaged .tgz artifact found in parent workspace.")
+        sys.exit(1)
 
-    print(f"--> Publishing {target_tgz.name} to Verdaccio...")
-    subprocess.run(pub_cmd, check=True, shell=use_npm_shell)
-    print("--> SUCCESS: Published package successfully!")
+    artifact_path = tgz_files[0].resolve()
+    print(f"--> Packaged Artifact: {artifact_path.name}")
+
+    # Authenticate & Publish
+    clean_url = re.sub(r'^https?://', '', verdaccio_url)
+    npmrc_path = Path(".npmrc")
+    npmrc_path.write_text(f"//{clean_url}/:_authToken=\"{verdaccio_token}\"\n", encoding="utf-8")
+
+    if not npm_bin:
+        print("Error: 'npm' executable not found for publish step.")
+        sys.exit(1)
+
+    publish_cmd = [
+        npm_bin, "publish",
+        str(artifact_path),
+        "--registry", f"{verdaccio_url}/",
+        "--tag", npm_tag
+    ]
+
+    print(f"--> Publishing {artifact_path.name} to Verdaccio...")
+    publish_result = subprocess.run(publish_cmd)
+
+    if npmrc_path.exists():
+        npmrc_path.unlink()
+
+    if publish_result.returncode != 0:
+        print("Error: Failed to publish package to Verdaccio registry.")
+        sys.exit(publish_result.returncode)
+
+    print("\n=========================================")
+    print("  SUCCESS: Package successfully published!")
+    print("=========================================")
 
 if __name__ == "__main__":
     main()
