@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+
 def get_env_var(name, required=True, default=None):
     val = os.getenv(name, default)
     if required and not val:
@@ -14,9 +15,11 @@ def get_env_var(name, required=True, default=None):
         sys.exit(1)
     return val
 
+
 def resolve_cmd(binary_name):
     """Resolves binary name to full path (handles npm.cmd / upm.exe on Windows)."""
     return shutil.which(binary_name)
+
 
 def find_upm_binary():
     """Searches standard system and user paths across Linux and Windows."""
@@ -36,6 +39,7 @@ def find_upm_binary():
 
     return resolve_cmd("upm")
 
+
 def determine_npm_tag(ref_name):
     if not ref_name:
         return "latest"
@@ -48,6 +52,7 @@ def determine_npm_tag(ref_name):
         return "latest"
 
     return "preview"
+
 
 def main():
     print("=========================================")
@@ -63,13 +68,13 @@ def main():
     print(f"--> Target Registry: {verdaccio_url}")
     print(f"--> Assigned NPM Release Tag: {npm_tag}")
 
-    # Inject Master Template .npmignore
+    # 1. Inject Master Template .npmignore
     template_ignore = Path(".org-configs/templates/.npmignore")
     if template_ignore.exists():
         shutil.copy(template_ignore, ".npmignore")
         print("--> Injected master .npmignore template.")
 
-    # Inject publishConfig into package.json
+    # 2. Inject publishConfig into package.json
     pkg_path = Path("package.json")
     if not pkg_path.exists():
         print("Error: package.json not found in repository root!")
@@ -87,7 +92,7 @@ def main():
         json.dump(pkg_data, f, indent=2)
     print(f"--> Injected publishConfig ({verdaccio_url}/) into package.json.")
 
-    # Clean up existing .tgz artifacts
+    # 3. Clean up existing .tgz artifacts
     parent_dir = Path("..")
     for tgz_file in parent_dir.glob("*.tgz"):
         try:
@@ -95,7 +100,7 @@ def main():
         except OSError:
             pass
 
-    # Pack Package
+    # 4. Pack Package (Unity UPM CLI with npm pack fallback)
     upm_bin = find_upm_binary()
     npm_bin = resolve_cmd("npm")
 
@@ -119,7 +124,7 @@ def main():
         print("Error: Neither Unity 'upm' CLI nor 'npm' executable could be found on system.")
         sys.exit(1)
 
-    # Locate Packaged Tarball
+    # 5. Locate Packaged Tarball Artifact
     tgz_files = sorted(parent_dir.glob("*.tgz"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not tgz_files:
         print("Error: No packaged .tgz artifact found in parent workspace.")
@@ -128,10 +133,13 @@ def main():
     artifact_path = tgz_files[0].resolve()
     print(f"--> Packaged Artifact: {artifact_path.name}")
 
-    # Authenticate & Publish
+    # 6. Authenticate & Publish to Verdaccio
     clean_url = re.sub(r'^https?://', '', verdaccio_url)
     npmrc_path = Path(".npmrc")
-    npmrc_path.write_text(f"//{clean_url}/:_authToken=\"{verdaccio_token}\"\n", encoding="utf-8")
+
+    # Unquoted token string for npm v20+ compatibility
+    npmrc_content = f"//{clean_url}/:_authToken={verdaccio_token}\n//{clean_url}/:always-auth=true\n"
+    npmrc_path.write_text(npmrc_content, encoding="utf-8")
 
     if not npm_bin:
         print("Error: 'npm' executable not found for publish step.")
@@ -147,6 +155,7 @@ def main():
     print(f"--> Publishing {artifact_path.name} to Verdaccio...")
     publish_result = subprocess.run(publish_cmd)
 
+    # Clean up temporary .npmrc credential file
     if npmrc_path.exists():
         npmrc_path.unlink()
 
@@ -157,6 +166,7 @@ def main():
     print("\n=========================================")
     print("  SUCCESS: Package successfully published!")
     print("=========================================")
+
 
 if __name__ == "__main__":
     main()
