@@ -37,6 +37,18 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Configure Extra Executable Paths
+        shell: bash
+        run: |
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          echo "/opt/upm/bin" >> $GITHUB_PATH
+          echo "C:\upm\bin" >> $GITHUB_PATH
+
       - name: Execute Python Publish Engine
         shell: bash
         env:
@@ -45,7 +57,6 @@ jobs:
           UPM_SERVICE_ACCOUNT_KEY_SECRET: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_SECRET }}
           UPM_ORGANIZATION_ID: ${{ secrets.UPM_ORGANIZATION_ID }}
           VERDACCIO_URL: ${{ inputs.registry-url }}
-          PATH: "$HOME/.local/bin:/opt/upm/bin:/usr/local/bin:C:\\upm\\bin:${{ env.PATH }}"
         run: |
           if [ -f ".org-configs/scripts/publish.py" ]; then
             python3 .org-configs/scripts/publish.py || python .org-configs/scripts/publish.py
