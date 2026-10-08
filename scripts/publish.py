@@ -4,9 +4,9 @@ import sys
 import json
 import re
 import shutil
+import base64
 import subprocess
 from pathlib import Path
-
 
 def get_env_var(name, required=True, default=None):
     val = os.getenv(name, default)
@@ -15,11 +15,9 @@ def get_env_var(name, required=True, default=None):
         sys.exit(1)
     return val
 
-
 def resolve_cmd(binary_name):
     """Resolves binary name to full path (handles npm.cmd / upm.exe on Windows)."""
     return shutil.which(binary_name)
-
 
 def find_upm_binary():
     """Searches standard system and user paths across Linux and Windows."""
@@ -39,7 +37,6 @@ def find_upm_binary():
 
     return resolve_cmd("upm")
 
-
 def determine_npm_tag(ref_name):
     if not ref_name:
         return "latest"
@@ -52,7 +49,6 @@ def determine_npm_tag(ref_name):
         return "latest"
 
     return "preview"
-
 
 def main():
     print("=========================================")
@@ -137,8 +133,19 @@ def main():
     clean_url = re.sub(r'^https?://', '', verdaccio_url)
     npmrc_path = Path(".npmrc")
 
-    # Unquoted token string for npm v20+ compatibility
-    npmrc_content = f"//{clean_url}/:_authToken={verdaccio_token}\n//{clean_url}/:always-auth=true\n"
+    # Smart credential resolution
+    if ":" in verdaccio_token:
+        # Provided as raw 'username:password' -> convert to base64 _auth
+        b64_auth = base64.b64encode(verdaccio_token.encode("utf-8")).decode("utf-8")
+        npmrc_content = f"//{clean_url}/:_auth={b64_auth}\n//{clean_url}/:always-auth=true\n"
+    else:
+        # Standard token format (writes both _authToken and _auth for max compatibility)
+        npmrc_content = (
+            f"//{clean_url}/:_authToken={verdaccio_token}\n"
+            f"//{clean_url}/:_auth={verdaccio_token}\n"
+            f"//{clean_url}/:always-auth=true\n"
+        )
+
     npmrc_path.write_text(npmrc_content, encoding="utf-8")
 
     if not npm_bin:
@@ -166,7 +173,6 @@ def main():
     print("\n=========================================")
     print("  SUCCESS: Package successfully published!")
     print("=========================================")
-
 
 if __name__ == "__main__":
     main()
