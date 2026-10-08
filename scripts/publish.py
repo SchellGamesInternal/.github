@@ -8,10 +8,13 @@ import base64
 import subprocess
 from pathlib import Path
 
+def log(msg):
+    print(msg, flush=True)
+
 def get_env_var(name, required=True, default=None):
     val = os.getenv(name, default)
     if required and not val:
-        print(f"Error: Missing required environment variable: {name}")
+        log(f"Error: Missing required environment variable: {name}")
         sys.exit(1)
     return val
 
@@ -22,12 +25,10 @@ def resolve_cmd(binary_name):
 def find_upm_binary():
     """Searches standard system and user paths across Linux and Windows."""
     candidates = [
-        # Linux / macOS
         "/opt/upm/bin/upm",
         "/usr/local/bin/upm",
         "/usr/bin/upm",
         os.path.expanduser("~/.local/bin/upm"),
-        # Windows
         r"C:\upm\bin\upm.exe",
         r"C:\Program Files\Unity\upm\bin\upm.exe",
     ]
@@ -51,9 +52,9 @@ def determine_npm_tag(ref_name):
     return "preview"
 
 def main():
-    print("=========================================")
-    print("  Unity UPM Central Publishing Engine   ")
-    print("=========================================\n")
+    log("=========================================")
+    log("  Unity UPM Central Publishing Engine   ")
+    log("=========================================\n")
 
     verdaccio_url = get_env_var("VERDACCIO_URL", required=True).rstrip('/')
     verdaccio_token = get_env_var("VERDACCIO_TOKEN", required=True).strip()
@@ -61,19 +62,19 @@ def main():
     git_ref = os.getenv("GITHUB_REF_NAME", "")
 
     npm_tag = determine_npm_tag(git_ref)
-    print(f"--> Target Registry: {verdaccio_url}")
-    print(f"--> Assigned NPM Release Tag: {npm_tag}")
+    log(f"--> Target Registry: {verdaccio_url}")
+    log(f"--> Assigned NPM Release Tag: {npm_tag}")
 
     # 1. Inject Master Template .npmignore
     template_ignore = Path(".org-configs/templates/.npmignore")
     if template_ignore.exists():
         shutil.copy(template_ignore, ".npmignore")
-        print("--> Injected master .npmignore template.")
+        log("--> Injected master .npmignore template.")
 
     # 2. Inject publishConfig into package.json
     pkg_path = Path("package.json")
     if not pkg_path.exists():
-        print("Error: package.json not found in repository root!")
+        log("Error: package.json not found in repository root!")
         sys.exit(1)
 
     with open(pkg_path, "r", encoding="utf-8") as f:
@@ -86,7 +87,7 @@ def main():
 
     with open(pkg_path, "w", encoding="utf-8") as f:
         json.dump(pkg_data, f, indent=2)
-    print(f"--> Injected publishConfig ({verdaccio_url}/) into package.json.")
+    log(f"--> Injected publishConfig ({verdaccio_url}/) into package.json.")
 
     # 3. Clean up existing .tgz artifacts
     parent_dir = Path("..")
@@ -101,53 +102,55 @@ def main():
     npm_bin = resolve_cmd("npm")
 
     if upm_bin:
-        print(f"--> Packaging using Unity UPM CLI: {upm_bin}")
+        log(f"--> Packaging using Unity UPM CLI: {upm_bin}")
         cmd = [upm_bin, "pack", ".", "--destination", ".."]
         if upm_org_id:
             cmd.extend(["--organization-id", upm_org_id])
 
         result = subprocess.run(cmd)
         if result.returncode != 0:
-            print("Error: Unity UPM pack operation failed.")
+            log("Error: Unity UPM pack operation failed.")
             sys.exit(result.returncode)
     elif npm_bin:
-        print("--> WARNING: Unity UPM CLI not found. Falling back to 'npm pack'...")
+        log("--> WARNING: Unity UPM CLI not found. Falling back to 'npm pack'...")
         result = subprocess.run([npm_bin, "pack", "--pack-destination", ".."])
         if result.returncode != 0:
-            print("Error: 'npm pack' fallback failed.")
+            log("Error: 'npm pack' fallback failed.")
             sys.exit(result.returncode)
     else:
-        print("Error: Neither Unity 'upm' CLI nor 'npm' executable could be found on system.")
+        log("Error: Neither Unity 'upm' CLI nor 'npm' executable could be found on system.")
         sys.exit(1)
 
     # 5. Locate Packaged Tarball Artifact
     tgz_files = sorted(parent_dir.glob("*.tgz"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not tgz_files:
-        print("Error: No packaged .tgz artifact found in parent workspace.")
+        log("Error: No packaged .tgz artifact found in parent workspace.")
         sys.exit(1)
 
     artifact_path = tgz_files[0].resolve()
-    print(f"--> Packaged Artifact: {artifact_path.name}")
+    log(f"--> Packaged Artifact: {artifact_path.name}")
 
     # 6. Authenticate & Publish to Verdaccio
-    clean_url = re.sub(r'^https?://', '', verdaccio_url)
+    clean_url = re.sub(r'^https?://', '', verdaccio_url).rstrip('/')
 
-    # If raw 'username:password' is passed, encode it to Base64 _auth
-    if ":" in verdaccio_token and not verdaccio_token.startswith("http"):
-        b64_auth = base64.b64encode(verdaccio_token.encode("utf-8")).decode("utf-8")
-        auth_entry = f"//{clean_url}/:_auth={b64_auth}"
-    else:
-        # Standard Verdaccio Bearer Token (_authToken only)
-        auth_entry = f"//{clean_url}/:_authToken={verdaccio_token}"
+    npmrc_lines = [
+        f"registry={verdaccio_url}/",
+        f"//{clean_url}/:_authToken={verdaccio_token}",
+        f"//{clean_url}:_authToken={verdaccio_token}",
+        f"{verdaccio_url}/:_authToken={verdaccio_token}",
+        f"//{clean_url}/:always-auth=true",
+        ""
+    ]
+    npmrc_content = "\n".join(npmrc_lines)
 
-    npmrc_content = f"{auth_entry}\n//{clean_url}/:always-auth=true\n"
-
-    # Write .npmrc in workspace root
     local_npmrc = Path(".npmrc")
+    user_npmrc = Path.home() / ".npmrc"
+
     local_npmrc.write_text(npmrc_content, encoding="utf-8")
+    user_npmrc.write_text(npmrc_content, encoding="utf-8")
 
     if not npm_bin:
-        print("Error: 'npm' executable not found for publish step.")
+        log("Error: 'npm' executable not found for publish step.")
         sys.exit(1)
 
     publish_cmd = [
@@ -157,20 +160,22 @@ def main():
         "--tag", npm_tag
     ]
 
-    print(f"--> Publishing {artifact_path.name} to Verdaccio...")
+    log(f"--> Publishing {artifact_path.name} to Verdaccio...")
     publish_result = subprocess.run(publish_cmd)
 
-    # Clean up temporary credential file
+    # Clean up temporary credential files
     if local_npmrc.exists():
         local_npmrc.unlink()
+    if user_npmrc.exists():
+        user_npmrc.unlink()
 
     if publish_result.returncode != 0:
-        print("Error: Failed to publish package to Verdaccio registry.")
+        log("Error: Failed to publish package to Verdaccio registry.")
         sys.exit(publish_result.returncode)
 
-    print("\n=========================================")
-    print("  SUCCESS: Package successfully published!")
-    print("=========================================")
+    log("\n=========================================")
+    log("  SUCCESS: Package successfully published!")
+    log("=========================================")
 
 if __name__ == "__main__":
     main()
