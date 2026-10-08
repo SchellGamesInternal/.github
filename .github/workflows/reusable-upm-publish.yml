@@ -19,7 +19,7 @@ on:
 
 jobs:
   build-and-publish:
-    runs-on: [self-hosted, Windows, X64, upm-runner]
+    runs-on: [self-hosted, Linux, X64, upm-runner]
     
     steps:
       - name: Checkout Package Repository
