@@ -9,13 +9,13 @@ on:
         default: 'http://172.16.0.69:4873'
     secrets:
       UPM_SERVICE_ACCOUNT_KEY_ID:
-        required: true
+        required: false
       UPM_SERVICE_ACCOUNT_KEY_SECRET:
-        required: true
+        required: false
       UPM_ORGANIZATION_ID:
-        required: true
+        required: false
       VERDACCIO_TOKEN:
-        required: true
+        required: false
 
 jobs:
   build-and-publish:
@@ -45,9 +45,10 @@ jobs:
       - name: Run Python Publish Script
         env:
           REGISTRY_URL: ${{ inputs.registry-url }}
-          UPM_ORGANIZATION_ID: ${{ secrets.UPM_ORGANIZATION_ID }}
-          UPM_SERVICE_ACCOUNT_KEY_ID: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_ID }}
-          UPM_SERVICE_ACCOUNT_KEY_SECRET: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_SECRET }}
-          VERDACCIO_TOKEN: ${{ secrets.VERDACCIO_TOKEN }}
+          # Uses repo secret if provided, otherwise falls back to runner's .env
+          UPM_ORGANIZATION_ID: ${{ secrets.UPM_ORGANIZATION_ID || env.UPM_ORGANIZATION_ID }}
+          UPM_SERVICE_ACCOUNT_KEY_ID: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_ID || env.UPM_SERVICE_ACCOUNT_KEY_ID }}
+          UPM_SERVICE_ACCOUNT_KEY_SECRET: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_SECRET || env.UPM_SERVICE_ACCOUNT_KEY_SECRET }}
+          VERDACCIO_TOKEN: ${{ secrets.VERDACCIO_TOKEN || env.VERDACCIO_TOKEN }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: python3 .org-configs/scripts/publish.py || python .org-configs/scripts/publish.py
