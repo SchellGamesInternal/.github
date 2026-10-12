@@ -53,6 +53,23 @@ def determine_npm_tag(ref_name):
 
     return "preview"
 
+def debug_secret_metadata(name, val, expected_match=None):
+    if not val:
+        log(f"--> [DEBUG SECRET] {name}: EMPTY / NOT SET")
+        return
+
+    length = len(val)
+    has_colon = ":" in val
+    first_char = val[0] if length > 0 else ""
+    last_char = val[-1] if length > 0 else ""
+
+    info = f"Length={length}, ContainsColon={has_colon}, StartsWith='{first_char}', EndsWith='{last_char}'"
+    if expected_match:
+        matches = (val == expected_match)
+        info += f", MatchesExpectedCredential={matches}"
+
+    log(f"--> [DEBUG SECRET] {name}: {info}")
+
 def main():
     log("=========================================")
     log("  Unity UPM Central Publishing Engine   ")
@@ -62,6 +79,11 @@ def main():
     raw_token = get_env_var("VERDACCIO_TOKEN", required=True).strip().rstrip('.')
     upm_org_id = os.getenv("UPM_ORGANIZATION_ID", "")
     git_ref = os.getenv("GITHUB_REF_NAME", "")
+
+    # Run secret diagnostics
+    debug_secret_metadata("VERDACCIO_TOKEN", raw_token, expected_match="schellgamesframework:nut$ch311")
+    debug_secret_metadata("UPM_SERVICE_ACCOUNT_KEY_ID", os.getenv("UPM_SERVICE_ACCOUNT_KEY_ID"))
+    debug_secret_metadata("UPM_SERVICE_ACCOUNT_KEY_SECRET", os.getenv("UPM_SERVICE_ACCOUNT_KEY_SECRET"))
 
     npm_tag = determine_npm_tag(git_ref)
     log(f"--> Target Registry: {verdaccio_url}")
