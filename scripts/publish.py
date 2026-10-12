@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 def log(msg):
+    """Prints immediately flushed logs for GitHub Actions console ordering."""
     print(msg, flush=True)
 
 def get_env_var(name, required=True, default=None):
@@ -25,20 +26,23 @@ def resolve_cmd(binary_name):
 def find_upm_binary():
     """Searches standard system and user paths across Linux and Windows."""
     candidates = [
+        # Linux / macOS
         "/opt/upm/bin/upm",
         "/usr/local/bin/upm",
         "/usr/bin/upm",
         os.path.expanduser("~/.local/bin/upm"),
+        # Windows
         r"C:\upm\bin\upm.exe",
         r"C:\Program Files\Unity\upm\bin\upm.exe",
     ]
     for path in candidates:
-        if os.path.isfile(path) and (os.access(path, os.X_OK) or path.endswith(".exe")):
+        if os.path.isfile(path) and (os.access(path, os.X_OK) or path.lower().endswith(".exe")):
             return path
 
     return resolve_cmd("upm")
 
 def determine_npm_tag(ref_name):
+    """Determines appropriate npm distribution tag from Git ref name."""
     if not ref_name:
         return "latest"
 
@@ -57,7 +61,7 @@ def main():
     log("=========================================\n")
 
     verdaccio_url = get_env_var("VERDACCIO_URL", required=True).rstrip('/')
-    verdaccio_token = get_env_var("VERDACCIO_TOKEN", required=True).strip()
+    raw_token = get_env_var("VERDACCIO_TOKEN", required=True).strip()
     upm_org_id = os.getenv("UPM_ORGANIZATION_ID", "")
     git_ref = os.getenv("GITHUB_REF_NAME", "")
 
@@ -89,7 +93,7 @@ def main():
         json.dump(pkg_data, f, indent=2)
     log(f"--> Injected publishConfig ({verdaccio_url}/) into package.json.")
 
-    # 3. Clean up existing .tgz artifacts
+    # 3. Clean up existing .tgz artifacts in workspace
     parent_dir = Path("..")
     for tgz_file in parent_dir.glob("*.tgz"):
         try:
@@ -132,22 +136,24 @@ def main():
 
     # 6. Authenticate & Publish to Verdaccio
     clean_url = re.sub(r'^https?://', '', verdaccio_url).rstrip('/')
+    npmrc_path = Path(".npmrc")
 
-    npmrc_lines = [
-        f"registry={verdaccio_url}/",
-        f"//{clean_url}/:_authToken={verdaccio_token}",
-        f"//{clean_url}:_authToken={verdaccio_token}",
-        f"{verdaccio_url}/:_authToken={verdaccio_token}",
-        f"//{clean_url}/:always-auth=true",
-        ""
-    ]
-    npmrc_content = "\n".join(npmrc_lines)
+    # Detect credential format: username:password VS pre-encoded Bearer Token
+    if ":" in raw_token and not raw_token.startswith("http"):
+        # Auto-converts unencoded username:password to Base64 HTTP Basic Auth
+        b64_val = base64.b64encode(raw_token.encode("utf-8")).decode("utf-8")
+        auth_line = f"//{clean_url}/:_auth={b64_val}"
+    else:
+        # Direct Bearer Token
+        auth_line = f"//{clean_url}/:_authToken={raw_token}"
 
-    local_npmrc = Path(".npmrc")
-    user_npmrc = Path.home() / ".npmrc"
+    npmrc_content = (
+        f"registry={verdaccio_url}/\n"
+        f"{auth_line}\n"
+        f"//{clean_url}/:always-auth=true\n"
+    )
 
-    local_npmrc.write_text(npmrc_content, encoding="utf-8")
-    user_npmrc.write_text(npmrc_content, encoding="utf-8")
+    npmrc_path.write_text(npmrc_content, encoding="utf-8")
 
     if not npm_bin:
         log("Error: 'npm' executable not found for publish step.")
@@ -157,17 +163,16 @@ def main():
         npm_bin, "publish",
         str(artifact_path),
         "--registry", f"{verdaccio_url}/",
+        "--userconfig", str(npmrc_path.resolve()),
         "--tag", npm_tag
     ]
 
     log(f"--> Publishing {artifact_path.name} to Verdaccio...")
     publish_result = subprocess.run(publish_cmd)
 
-    # Clean up temporary credential files
-    if local_npmrc.exists():
-        local_npmrc.unlink()
-    if user_npmrc.exists():
-        user_npmrc.unlink()
+    # Clean up temporary credential file
+    if npmrc_path.exists():
+        npmrc_path.unlink()
 
     if publish_result.returncode != 0:
         log("Error: Failed to publish package to Verdaccio registry.")
