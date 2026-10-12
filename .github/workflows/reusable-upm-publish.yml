@@ -51,4 +51,4 @@ jobs:
           UPM_SERVICE_ACCOUNT_KEY_SECRET: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_SECRET || env.UPM_SERVICE_ACCOUNT_KEY_SECRET }}
           VERDACCIO_TOKEN: ${{ secrets.VERDACCIO_TOKEN || env.VERDACCIO_TOKEN }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
-        run: python3 .org-configs/scripts/publish.py || python .org-configs/scripts/publish.py
+        run: python3 .org-configs/scripts/publish.py
