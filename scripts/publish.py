@@ -26,12 +26,10 @@ def resolve_cmd(binary_name):
 def find_upm_binary():
     """Searches standard system and user paths across Linux and Windows."""
     candidates = [
-        # Linux / macOS
         "/opt/upm/bin/upm",
         "/usr/local/bin/upm",
         "/usr/bin/upm",
         os.path.expanduser("~/.local/bin/upm"),
-        # Windows
         r"C:\upm\bin\upm.exe",
         r"C:\Program Files\Unity\upm\bin\upm.exe",
     ]
@@ -55,36 +53,13 @@ def determine_npm_tag(ref_name):
 
     return "preview"
 
-def detect_and_format_auth(token, clean_url):
-    """Detects credential format and returns single correct .npmrc auth line."""
-    token = token.strip().rstrip('.')
-
-    # 1. Plain unencoded 'username:password'
-    if ":" in token and not token.startswith("http"):
-        log("--> Detected plain 'username:password' credentials. Configuring Basic Auth (_auth)...")
-        b64_val = base64.b64encode(token.encode("utf-8")).decode("utf-8")
-        return f"//{clean_url}/:_auth={b64_val}"
-
-    # 2. Pre-Base64 encoded 'username:password'
-    try:
-        decoded = base64.b64decode(token).decode("utf-8", errors="ignore")
-        if ":" in decoded:
-            log("--> Detected Base64-encoded 'username:password' credentials. Configuring Basic Auth (_auth)...")
-            return f"//{clean_url}/:_auth={token}"
-    except Exception:
-        pass
-
-    # 3. Fallback: Standard Bearer Token
-    log("--> Detected Bearer token format. Configuring Token Auth (_authToken)...")
-    return f"//{clean_url}/:_authToken={token}"
-
 def main():
     log("=========================================")
     log("  Unity UPM Central Publishing Engine   ")
     log("=========================================\n")
 
     verdaccio_url = get_env_var("VERDACCIO_URL", required=True).rstrip('/')
-    raw_token = get_env_var("VERDACCIO_TOKEN", required=True)
+    raw_token = get_env_var("VERDACCIO_TOKEN", required=True).strip().rstrip('.')
     upm_org_id = os.getenv("UPM_ORGANIZATION_ID", "")
     git_ref = os.getenv("GITHUB_REF_NAME", "")
 
@@ -159,9 +134,14 @@ def main():
 
     # 6. Authenticate & Publish to Verdaccio
     clean_url = re.sub(r'^https?://', '', verdaccio_url).rstrip('/')
-    npmrc_path = Path(".npmrc")
 
-    auth_line = detect_and_format_auth(raw_token, clean_url)
+    if ":" in raw_token and not raw_token.startswith("http"):
+        log("--> Detected raw 'username:password' credentials. Configuring Basic Auth (_auth)...")
+        b64_val = base64.b64encode(raw_token.encode("utf-8")).decode("utf-8")
+        auth_line = f"//{clean_url}/:_auth={b64_val}"
+    else:
+        log("--> Detected Bearer token. Configuring Token Auth (_authToken)...")
+        auth_line = f"//{clean_url}/:_authToken={raw_token}"
 
     npmrc_content = (
         f"registry={verdaccio_url}/\n"
