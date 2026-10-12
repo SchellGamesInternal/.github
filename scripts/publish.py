@@ -55,13 +55,36 @@ def determine_npm_tag(ref_name):
 
     return "preview"
 
+def detect_and_format_auth(token, clean_url):
+    """Detects credential format and returns single correct .npmrc auth line."""
+    token = token.strip().rstrip('.')
+
+    # 1. Plain unencoded 'username:password'
+    if ":" in token and not token.startswith("http"):
+        log("--> Detected plain 'username:password' credentials. Configuring Basic Auth (_auth)...")
+        b64_val = base64.b64encode(token.encode("utf-8")).decode("utf-8")
+        return f"//{clean_url}/:_auth={b64_val}"
+
+    # 2. Pre-Base64 encoded 'username:password'
+    try:
+        decoded = base64.b64decode(token).decode("utf-8", errors="ignore")
+        if ":" in decoded:
+            log("--> Detected Base64-encoded 'username:password' credentials. Configuring Basic Auth (_auth)...")
+            return f"//{clean_url}/:_auth={token}"
+    except Exception:
+        pass
+
+    # 3. Fallback: Standard Bearer Token
+    log("--> Detected Bearer token format. Configuring Token Auth (_authToken)...")
+    return f"//{clean_url}/:_authToken={token}"
+
 def main():
     log("=========================================")
     log("  Unity UPM Central Publishing Engine   ")
     log("=========================================\n")
 
     verdaccio_url = get_env_var("VERDACCIO_URL", required=True).rstrip('/')
-    raw_token = get_env_var("VERDACCIO_TOKEN", required=True).strip()
+    raw_token = get_env_var("VERDACCIO_TOKEN", required=True)
     upm_org_id = os.getenv("UPM_ORGANIZATION_ID", "")
     git_ref = os.getenv("GITHUB_REF_NAME", "")
 
@@ -138,14 +161,7 @@ def main():
     clean_url = re.sub(r'^https?://', '', verdaccio_url).rstrip('/')
     npmrc_path = Path(".npmrc")
 
-    # Detect credential format: username:password VS pre-encoded Bearer Token
-    if ":" in raw_token and not raw_token.startswith("http"):
-        # Auto-converts unencoded username:password to Base64 HTTP Basic Auth
-        b64_val = base64.b64encode(raw_token.encode("utf-8")).decode("utf-8")
-        auth_line = f"//{clean_url}/:_auth={b64_val}"
-    else:
-        # Direct Bearer Token
-        auth_line = f"//{clean_url}/:_authToken={raw_token}"
+    auth_line = detect_and_format_auth(raw_token, clean_url)
 
     npmrc_content = (
         f"registry={verdaccio_url}/\n"
@@ -153,7 +169,11 @@ def main():
         f"//{clean_url}/:always-auth=true\n"
     )
 
-    npmrc_path.write_text(npmrc_content, encoding="utf-8")
+    local_npmrc = Path(".npmrc")
+    user_npmrc = Path.home() / ".npmrc"
+
+    local_npmrc.write_text(npmrc_content, encoding="utf-8")
+    user_npmrc.write_text(npmrc_content, encoding="utf-8")
 
     if not npm_bin:
         log("Error: 'npm' executable not found for publish step.")
@@ -163,16 +183,18 @@ def main():
         npm_bin, "publish",
         str(artifact_path),
         "--registry", f"{verdaccio_url}/",
-        "--userconfig", str(npmrc_path.resolve()),
+        "--userconfig", str(local_npmrc.resolve()),
         "--tag", npm_tag
     ]
 
     log(f"--> Publishing {artifact_path.name} to Verdaccio...")
     publish_result = subprocess.run(publish_cmd)
 
-    # Clean up temporary credential file
-    if npmrc_path.exists():
-        npmrc_path.unlink()
+    # Clean up temporary credential files
+    if local_npmrc.exists():
+        local_npmrc.unlink()
+    if user_npmrc.exists():
+        user_npmrc.unlink()
 
     if publish_result.returncode != 0:
         log("Error: Failed to publish package to Verdaccio registry.")
