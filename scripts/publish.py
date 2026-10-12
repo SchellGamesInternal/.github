@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import sys
 import json
@@ -46,6 +47,11 @@ def main():
     org_id = os.environ.get("UPM_ORGANIZATION_ID", "")
     verdaccio_token = os.environ.get("VERDACCIO_TOKEN", "").strip().strip('"')
     github_ref = os.environ.get("GITHUB_REF_NAME", "")
+
+    # Validate secret presence early
+    if not verdaccio_token:
+        print("Error: VERDACCIO_TOKEN environment variable is missing or empty!", file=sys.stderr, flush=True)
+        sys.exit(1)
 
     # 1. Detect OS & Resolve UPM Executable Path
     if sys.platform == "win32":
@@ -117,7 +123,7 @@ def main():
     # 7. Authenticate & Publish to Verdaccio
     clean_url = re.sub(r"^https?://", "", registry_url).rstrip('/')
 
-    # Detect credential format (username:password vs Bearer token)
+    # Detect credential format (raw username:password vs Bearer token)
     if ":" in verdaccio_token and not verdaccio_token.startswith("http"):
         print("--> Detected 'username:password' credentials. Encoding to Base64 Basic Auth (_auth)...", flush=True)
         b64_val = base64.b64encode(verdaccio_token.encode("utf-8")).decode("utf-8")
@@ -126,9 +132,13 @@ def main():
         print("--> Detected Bearer token. Configuring _authToken...", flush=True)
         auth_line = f'//{clean_url}/:_authToken="{verdaccio_token}"'
 
-    with open(".npmrc", "w", encoding="utf-8") as f:
-        f.write(f"{auth_line}\n")
-        f.write(f'//{clean_url}/:always-auth=true\n')
+    npmrc_path = Path(".npmrc")
+    npmrc_content = (
+        f"{auth_line}\n"
+        f"//{clean_url}/:always-auth=true\n"
+    )
+
+    npmrc_path.write_text(npmrc_content, encoding="utf-8")
 
     tgz_files = sorted(parent_dir.glob("*.tgz"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not tgz_files:
@@ -137,15 +147,25 @@ def main():
 
     target_tgz = tgz_files[0]
     npm_bin = resolve_binary("npm")
-    pub_cmd = [npm_bin, "publish", str(target_tgz), "--registry", f"{registry_url}/", "--tag", npm_tag]
+    pub_cmd = [
+        npm_bin, "publish",
+        str(target_tgz),
+        "--registry", f"{registry_url}/",
+        "--userconfig", str(npmrc_path.resolve()),
+        "--tag", npm_tag
+    ]
     use_npm_shell = sys.platform == "win32" and npm_bin.lower().endswith((".cmd", ".bat"))
 
     print(f"--> Publishing {target_tgz.name} to Verdaccio...", flush=True)
-    subprocess.run(pub_cmd, check=True, shell=use_npm_shell)
+    pub_result = subprocess.run(pub_cmd, shell=use_npm_shell)
 
     # Cleanup temporary .npmrc
-    if Path(".npmrc").exists():
-        Path(".npmrc").unlink()
+    if npmrc_path.exists():
+        npmrc_path.unlink()
+
+    if pub_result.returncode != 0:
+        print("Error: Failed to publish package to Verdaccio registry.", file=sys.stderr, flush=True)
+        sys.exit(pub_result.returncode)
 
     print("--> SUCCESS: Published package successfully!", flush=True)
 

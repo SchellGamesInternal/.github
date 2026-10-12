@@ -37,6 +37,11 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       - name: Run Python Publish Script
         env:
           REGISTRY_URL: ${{ inputs.registry-url }}
