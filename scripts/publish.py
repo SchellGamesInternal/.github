@@ -44,13 +44,43 @@ def resolve_binary(cmd_name_or_path):
 
 def main():
     registry_url = os.environ.get("REGISTRY_URL", "").rstrip("/")
-    org_id = os.environ.get("UPM_ORGANIZATION_ID", "")
-    verdaccio_token = os.environ.get("VERDACCIO_TOKEN", "").strip().strip('"')
     github_ref = os.environ.get("GITHUB_REF_NAME", "")
 
-    # Validate secret presence early
+    # Prefer repository secrets if present, otherwise read from host runner .env
+    verdaccio_token = (
+            os.environ.get("REPO_SECRET_VERDACCIO_TOKEN")
+            or os.environ.get("VERDACCIO_TOKEN")
+            or ""
+    ).strip().strip('"')
+
+    org_id = (
+            os.environ.get("REPO_SECRET_UPM_ORGANIZATION_ID")
+            or os.environ.get("UPM_ORGANIZATION_ID")
+            or ""
+    ).strip()
+
+    service_account_id = (
+            os.environ.get("REPO_SECRET_UPM_SERVICE_ACCOUNT_KEY_ID")
+            or os.environ.get("UPM_SERVICE_ACCOUNT_KEY_ID")
+            or ""
+    ).strip()
+
+    service_account_secret = (
+            os.environ.get("REPO_SECRET_UPM_SERVICE_ACCOUNT_KEY_SECRET")
+            or os.environ.get("UPM_SERVICE_ACCOUNT_KEY_SECRET")
+            or ""
+    ).strip()
+
+    # Re-export to environment so child processes (like the UPM binary) inherit them
+    if org_id:
+        os.environ["UPM_ORGANIZATION_ID"] = org_id
+    if service_account_id:
+        os.environ["UPM_SERVICE_ACCOUNT_KEY_ID"] = service_account_id
+    if service_account_secret:
+        os.environ["UPM_SERVICE_ACCOUNT_KEY_SECRET"] = service_account_secret
+
     if not verdaccio_token:
-        print("Error: VERDACCIO_TOKEN environment variable is missing or empty!", file=sys.stderr, flush=True)
+        print("Error: VERDACCIO_TOKEN is missing from both repository secrets and runner host .env!", file=sys.stderr, flush=True)
         sys.exit(1)
 
     # 1. Detect OS & Resolve UPM Executable Path
