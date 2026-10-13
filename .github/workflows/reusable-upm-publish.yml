@@ -42,22 +42,6 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Inspect Runner .env and Environment Variables
-        run: |
-          echo "=== 1. Checking /root/actions-runner/.env on disk ==="
-          if [ -f /root/actions-runner/.env ]; then
-            cat -A /root/actions-runner/.env
-          else
-            echo "FILE NOT FOUND at /root/actions-runner/.env!"
-            ls -la /root/actions-runner/ || true
-          fi
-
-          echo "=== 2. Checking In-Memory Variables Loaded by Runner ==="
-          echo "UPM_ORGANIZATION_ID: '${UPM_ORGANIZATION_ID}'"
-          echo "UPM_SERVICE_ACCOUNT_KEY_ID: '${UPM_SERVICE_ACCOUNT_KEY_ID}'"
-          echo "UPM_SERVICE_ACCOUNT_KEY_SECRET length: ${#UPM_SERVICE_ACCOUNT_KEY_SECRET}"
-          echo "VERDACCIO_TOKEN length: ${#VERDACCIO_TOKEN}"
-
       - name: Run Python Publish Script
         env:
           REGISTRY_URL: ${{ inputs.registry-url }}
