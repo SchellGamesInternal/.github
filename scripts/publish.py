@@ -8,6 +8,7 @@ import base64
 import subprocess
 from pathlib import Path
 
+
 def resolve_binary(cmd_name_or_path):
     """Resolves executable paths across Linux and Windows environments."""
     if os.path.isfile(cmd_name_or_path):
@@ -20,7 +21,8 @@ def resolve_binary(cmd_name_or_path):
         if ext:
             candidates.extend([cmd_name_or_path, f"{base}.cmd", f"{base}.exe", f"{base}.bat"])
         else:
-            candidates.extend([f"{cmd_name_or_path}.cmd", f"{cmd_name_or_path}.exe", f"{cmd_name_or_path}.bat", cmd_name_or_path])
+            candidates.extend(
+                [f"{cmd_name_or_path}.cmd", f"{cmd_name_or_path}.exe", f"{cmd_name_or_path}.bat", cmd_name_or_path])
     else:
         candidates.append(cmd_name_or_path)
 
@@ -42,36 +44,37 @@ def resolve_binary(cmd_name_or_path):
 
     return cmd_name_or_path
 
+
 def main():
+    # 0. Load and sanitize input arguments & environment secrets
     registry_url = os.environ.get("REGISTRY_URL", "").rstrip("/")
     github_ref = os.environ.get("GITHUB_REF_NAME", "")
 
-    # Prefer repository secrets if present, otherwise read from host runner .env
     verdaccio_token = (
             os.environ.get("REPO_SECRET_VERDACCIO_TOKEN")
             or os.environ.get("VERDACCIO_TOKEN")
             or ""
-    ).strip().strip('"')
+    ).strip().strip('"').strip("'")
 
     org_id = (
             os.environ.get("REPO_SECRET_UPM_ORGANIZATION_ID")
             or os.environ.get("UPM_ORGANIZATION_ID")
             or ""
-        ).strip().strip('"').strip("'")
-    
-        service_account_id = (
+    ).strip().strip('"').strip("'")
+
+    service_account_id = (
             os.environ.get("REPO_SECRET_UPM_SERVICE_ACCOUNT_KEY_ID")
             or os.environ.get("UPM_SERVICE_ACCOUNT_KEY_ID")
             or ""
-        ).strip().strip('"').strip("'")
-    
-        service_account_secret = (
+    ).strip().strip('"').strip("'")
+
+    service_account_secret = (
             os.environ.get("REPO_SECRET_UPM_SERVICE_ACCOUNT_KEY_SECRET")
             or os.environ.get("UPM_SERVICE_ACCOUNT_KEY_SECRET")
             or ""
-        ).strip().strip('"').strip("'")
+    ).strip().strip('"').strip("'")
 
-    # Re-export to environment so child processes (like the UPM binary) inherit them
+    # Re-export sanitized credentials so child processes (UPM binary) inherit them
     if org_id:
         os.environ["UPM_ORGANIZATION_ID"] = org_id
     if service_account_id:
@@ -80,7 +83,8 @@ def main():
         os.environ["UPM_SERVICE_ACCOUNT_KEY_SECRET"] = service_account_secret
 
     if not verdaccio_token:
-        print("Error: VERDACCIO_TOKEN is missing from both repository secrets and runner host .env!", file=sys.stderr, flush=True)
+        print("Error: VERDACCIO_TOKEN is missing from both repository secrets and runner host .env!", file=sys.stderr,
+              flush=True)
         sys.exit(1)
 
     # 1. Detect OS & Resolve UPM Executable Path
@@ -143,7 +147,7 @@ def main():
     if use_upm:
         pack_cmd = [upm_path, "pack", ".", "--organization-id", org_id, "--destination", ".."]
         use_upm_shell = sys.platform == "win32" and upm_path.lower().endswith((".cmd", ".bat"))
-        print(f"--> Packing package with: {upm_path}...", flush=True)
+        print(f"--> Packing and signing package with: {upm_path}...", flush=True)
         subprocess.run(pack_cmd, check=True, shell=use_upm_shell)
     else:
         npm_bin = resolve_binary("npm")
@@ -153,7 +157,6 @@ def main():
     # 7. Authenticate & Publish to Verdaccio
     clean_url = re.sub(r"^https?://", "", registry_url).rstrip('/')
 
-    # Detect credential format (raw username:password vs Bearer token)
     if ":" in verdaccio_token and not verdaccio_token.startswith("http"):
         print("--> Detected 'username:password' credentials. Encoding to Base64 Basic Auth (_auth)...", flush=True)
         b64_val = base64.b64encode(verdaccio_token.encode("utf-8")).decode("utf-8")
@@ -189,7 +192,7 @@ def main():
     print(f"--> Publishing {target_tgz.name} to Verdaccio...", flush=True)
     pub_result = subprocess.run(pub_cmd, shell=use_npm_shell)
 
-    # Cleanup temporary .npmrc
+    # Clean up temporary .npmrc
     if npmrc_path.exists():
         npmrc_path.unlink()
 
@@ -198,6 +201,7 @@ def main():
         sys.exit(pub_result.returncode)
 
     print("--> SUCCESS: Published package successfully!", flush=True)
+
 
 if __name__ == "__main__":
     main()
