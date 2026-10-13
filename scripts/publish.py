@@ -57,19 +57,19 @@ def main():
             os.environ.get("REPO_SECRET_UPM_ORGANIZATION_ID")
             or os.environ.get("UPM_ORGANIZATION_ID")
             or ""
-    ).strip()
-
-    service_account_id = (
+        ).strip().strip('"').strip("'")
+    
+        service_account_id = (
             os.environ.get("REPO_SECRET_UPM_SERVICE_ACCOUNT_KEY_ID")
             or os.environ.get("UPM_SERVICE_ACCOUNT_KEY_ID")
             or ""
-    ).strip()
-
-    service_account_secret = (
+        ).strip().strip('"').strip("'")
+    
+        service_account_secret = (
             os.environ.get("REPO_SECRET_UPM_SERVICE_ACCOUNT_KEY_SECRET")
             or os.environ.get("UPM_SERVICE_ACCOUNT_KEY_SECRET")
             or ""
-    ).strip()
+        ).strip().strip('"').strip("'")
 
     # Re-export to environment so child processes (like the UPM binary) inherit them
     if org_id:
