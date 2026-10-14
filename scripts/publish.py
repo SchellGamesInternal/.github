@@ -113,7 +113,8 @@ def main():
     # 3. Inject publishConfig registry target into package.json
     pkg_json_path = Path("package.json")
     if pkg_json_path.exists():
-        with open(pkg_json_path, "r", encoding="utf-8") as f:
+        # Use utf-8-sig to automatically detect and discard UTF-8 BOM headers
+        with open(pkg_json_path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         if "publishConfig" not in data or not isinstance(data["publishConfig"], dict):
             data["publishConfig"] = {}
@@ -145,7 +146,11 @@ def main():
             pass
 
     if use_upm:
-        pack_cmd = [upm_path, "pack", ".", "--organization-id", org_id, "--destination", ".."]
+        pack_cmd = [upm_path, "pack", "."]
+        if org_id:
+            pack_cmd.extend(["--organization-id", org_id])
+        pack_cmd.extend(["--destination", ".."])
+
         use_upm_shell = sys.platform == "win32" and upm_path.lower().endswith((".cmd", ".bat"))
         print(f"--> Packing and signing package with: {upm_path}...", flush=True)
         subprocess.run(pack_cmd, check=True, shell=use_upm_shell)
