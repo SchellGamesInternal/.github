@@ -1,0 +1,36 @@
+name: Reusable Unity Package Test Trigger
+
+on:
+  workflow_call:
+    inputs:
+      jenkins-webhook-url:
+        required: false
+        type: string
+        default: 'https://build.schellgames.com/generic-webhook-trigger/invoke?token=unittest-pipeline-trigger-secret'
+
+jobs:
+  trigger-jenkins-test:
+    runs-on: [self-hosted, upm-runner]
+
+    steps:
+      - name: Trigger Internal Jenkins Test Pipeline
+        run: |
+          TARGET_SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          PR_NUM="${{ github.event.pull_request.number || '0' }}"
+
+          echo "Triggering Jenkins for ${{ github.repository }} @ SHA ${TARGET_SHA} (PR #${PR_NUM})..."
+
+          curl -k -X POST "${{ inputs.jenkins-webhook-url }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"repository\": {
+                \"name\": \"${{ github.event.repository.name }}\",
+                \"owner\": { \"login\": \"${{ github.repository_owner }}\" }
+              },
+              \"pull_request\": {
+                \"head\": { \"sha\": \"${TARGET_SHA}\" }
+              },
+              \"number\": ${PR_NUM}
+            }"
+
+          echo "--> Jenkins job triggered successfully."
