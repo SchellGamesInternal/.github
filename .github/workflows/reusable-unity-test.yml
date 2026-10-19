@@ -15,22 +15,32 @@ jobs:
     steps:
       - name: Trigger Internal Jenkins Test Pipeline
         run: |
+          # Robust extraction of repo owner and name from standard runner environment
+          REPO_FULL="${GITHUB_REPOSITORY}"
+          REPO_OWNER="${REPO_FULL%%/*}"
+          REPO_NAME="${REPO_FULL#*/}"
+          
           TARGET_SHA="${{ github.event.pull_request.head.sha || github.sha }}"
           PR_NUM="${{ github.event.pull_request.number || '0' }}"
 
-          echo "Triggering Jenkins for ${{ github.repository }} @ SHA ${TARGET_SHA} (PR #${PR_NUM})..."
+          echo "Triggering Jenkins for ${REPO_OWNER}/${REPO_NAME} @ SHA ${TARGET_SHA} (PR #${PR_NUM})..."
+
+          PAYLOAD=$(cat <<EOF
+          {
+            "repository": {
+              "name": "${REPO_NAME}",
+              "owner": { "login": "${REPO_OWNER}" }
+            },
+            "pull_request": {
+              "head": { "sha": "${TARGET_SHA}" }
+            },
+            "number": ${PR_NUM}
+          }
+          EOF
+          )
 
           curl -k -X POST "${{ inputs.jenkins-webhook-url }}" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"repository\": {
-                \"name\": \"${{ github.event.repository.name }}\",
-                \"owner\": { \"login\": \"${{ github.repository_owner }}\" }
-              },
-              \"pull_request\": {
-                \"head\": { \"sha\": \"${TARGET_SHA}\" }
-              },
-              \"number\": ${PR_NUM}
-            }"
+            -d "${PAYLOAD}"
 
           echo "--> Jenkins job triggered successfully."
