@@ -83,7 +83,7 @@ def main():
 
     qwen_api_base = (
             os.environ.get("QWEN_API_BASE")
-            or "[http://ai-research-mt.schellgames.local:8000/v1](http://ai-research-mt.schellgames.local:8000/v1)"
+            or "http://ai-research-mt.schellgames.local:8000/v1"
     ).strip().strip('"').strip("'").rstrip("/")
 
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")
@@ -121,7 +121,7 @@ def main():
         "Content-Type": "application/json"
     }
 
-    files_url = f"[https://api.github.com/repos/](https://api.github.com/repos/){repo_full}/pulls/{pull_number}/files"
+    files_url = f"https://api.github.com/repos/{repo_full}/pulls/{pull_number}/files"
     files = http_request(files_url, headers=gh_headers)
 
     all_findings = []
@@ -253,7 +253,7 @@ def main():
             }
 
             try:
-                comment_url = f"https://api.github.com/repos/{repo_full}/pulls/{pull_number}/comments"
+                comment_url = f"[https://api.github.com/repos/](https://api.github.com/repos/){repo_full}/pulls/{pull_number}/comments"
                 http_request(comment_url, method="POST", headers=gh_headers, data=payload)
                 print(f"Posted inline comment on {path}:{line_num}")
             except urllib.error.HTTPError as e:
@@ -310,7 +310,7 @@ def main():
     summary_markdown = f"{verdict}\n\n{exec_summary}\n\n{findings_block}\n\n{what_changed_block}\n\n{reviewed_block}{unreviewed_block}"
 
     try:
-        issue_url = f"https://api.github.com/repos/{repo_full}/issues/{pull_number}/comments"
+        issue_url = f"[https://api.github.com/repos/](https://api.github.com/repos/){repo_full}/issues/{pull_number}/comments"
         http_request(issue_url, method="POST", headers=gh_headers, data={"body": summary_markdown})
         print("Posted review summary comment to PR discussion.")
     except Exception as e:
