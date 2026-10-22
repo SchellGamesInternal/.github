@@ -5,7 +5,10 @@ on:
 
 jobs:
   ai-review:
-    runs-on: [self-hosted, upm-runner]
+    runs-on: [self-hosted, Linux, upm-runner]
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout Target Repository
         uses: actions/checkout@v4
@@ -21,4 +24,13 @@ jobs:
           python-version: '3.x'
 
       - name: Execute AI Code Review
-        run: python3 .org-configs/scripts/ai_reviewer/review.py
+        run: |
+          REVIEW_SCRIPT=$(find .org-configs -name "review.py" | head -n 1)
+
+          if [ -z "$REVIEW_SCRIPT" ]; then
+            echo "Error: review.py was not found in .org-configs!"
+            exit 1
+          fi
+
+          echo "Running review script: ${REVIEW_SCRIPT}"
+          python3 "${REVIEW_SCRIPT}"
