@@ -24,6 +24,8 @@ jobs:
           python-version: '3.x'
 
       - name: Execute AI Code Review
+        env:
+          ACTIONS_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REVIEW_SCRIPT=$(find .org-configs -name "review.py" | head -n 1)
 
