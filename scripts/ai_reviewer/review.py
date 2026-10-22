@@ -14,17 +14,16 @@ ALLOWED_EXTENSIONS = {
 }
 
 
-def mask_secret(val):
-    if not val:
-        return "<EMPTY / NOT SET>"
-    val = val.strip().strip('"').strip("'")
-    if len(val) <= 8:
-        return f"{val[:2]}*** (length: {len(val)})"
-    return f"{val[:4]}...{val[-4:]} (length: {len(val)})"
+def clean_url(url):
+    # Strip any accidental markdown formatting: [text](url)
+    url = url.strip()
+    url = re.sub(r'\[.*?\]\((https?://[^\)]+)\)', r'\1', url)
+    url = re.sub(r'^[\[\(]+', '', url) url = re.sub(r'[\]\)]+$', '', url)
+    return url.strip()
 
 
 def http_request_raw(url, method="GET", headers=None, data=None):
-    url = url.strip().lstrip("[").rstrip("]")
+    url = clean_url(url)
     req = urllib.request.Request(url, method=method)
     if headers:
         for k, v in headers.items():
@@ -40,62 +39,19 @@ def http_request(url, method="GET", headers=None, data=None):
     return data
 
 
-def inspect_token(name, token, repo_full):
-    print(f"--- Diagnosing Token: {name} ---")
-    if not token:
-        print(f"  Status: {name} is empty or not provided.\n")
-        return None
-
-    print(f"  Masked Value : {mask_secret(token)}")
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "SchellGames-AI-Reviewer"
-    }
-
-    # 1. Check Identity and Scopes
-    try:
-        user_data, user_headers, status = http_request_raw("https://api.github.com/user", headers=headers)
-        login = user_data.get("login", "<App / Bot>")
-        scopes = user_headers.get("x-oauth-scopes", "None reported (likely installation token or app)")
-        print(f"  GitHub User  : {login}")
-        print(f"  OAuth Scopes : {scopes}")
-    except urllib.error.HTTPError as e:
-        print(f"  Identity Check Failed : HTTP {e.code} ({e.read().decode('utf-8', errors='replace').strip()})")
-    except Exception as e:
-        print(f"  Identity Check Error  : {e}")
-
-    # 2. Check Permissions on Target Repo
-    try:
-        repo_data, _, _ = http_request_raw(f"https://api.github.com/repos/{repo_full}", headers=headers)
-        permissions = repo_data.get("permissions", {})
-        print(f"  Repo Access  : Found {repo_full}")
-        print(f"  Permissions  : {json.dumps(permissions)}")
-        print(f"  Can Write    : {permissions.get('push', False)}")
-    except urllib.error.HTTPError as e:
-        print(f"  Repo Access Failed    : HTTP {e.code} ({e.read().decode('utf-8', errors='replace').strip()})")
-    except Exception as e:
-        print(f"  Repo Access Error     : {e}")
-
-    print()
-    return headers
-
-
 def post_with_fallback(url, data, primary_name, primary_headers, fallback_name, fallback_headers):
-    # Attempt Primary Token
+    clean_target = clean_url(url)
     try:
-        http_request(url, method="POST", headers=primary_headers, data=data)
+        http_request(clean_target, method="POST", headers=primary_headers, data=data)
         return True
     except urllib.error.HTTPError as e:
         err_msg = e.read().decode("utf-8", errors="replace")
-        print(f"  {primary_name} rejected POST to {url} (HTTP {e.code}): {err_msg.strip()}")
+        print(f"  {primary_name} rejected POST to {clean_target} (HTTP {e.code}): {err_msg.strip()}")
 
-        # Attempt Fallback Token if Available
         if fallback_headers:
             print(f"  Attempting fallback with {fallback_name}...")
             try:
-                http_request(url, method="POST", headers=fallback_headers, data=data)
+                http_request(clean_target, method="POST", headers=fallback_headers, data=data)
                 print(f"  Success: Posted using {fallback_name}!")
                 return True
             except urllib.error.HTTPError as e_fb:
@@ -104,7 +60,7 @@ def post_with_fallback(url, data, primary_name, primary_headers, fallback_name, 
             except Exception as e_fb_gen:
                 print(f"  {fallback_name} unexpected failure: {e_fb_gen}")
     except Exception as e_gen:
-        print(f"  Unexpected failure on POST {url}: {e_gen}")
+        print(f"  Unexpected failure on POST {clean_target}: {e_gen}")
 
     return False
 
@@ -147,27 +103,15 @@ def parse_diff_hunk(patch):
 
 
 def main():
-    print("==================================================")
-    print("           AI REVIEWER DIAGNOSTICS                ")
-    print("==================================================")
-
-    # 1. Environment & Path Resolution
     pat_token = (os.environ.get("UNITY_FRAMEWORK_PAT") or "").strip().strip('"').strip("'")
     actions_token = (os.environ.get("ACTIONS_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
     qwen_api_key = (os.environ.get("QWEN_API_KEY") or "").strip().strip('"').strip("'")
     qwen_api_base = (
             os.environ.get("QWEN_API_BASE")
-            or "http://ai-research-mt.schellgames.local:8000/v1"
+            or "[http://ai-research-mt.schellgames.local:8000/v1](http://ai-research-mt.schellgames.local:8000/v1)"
     ).strip().strip('"').strip("'").rstrip("/")
 
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")
-
-    print(f"Runner Host Machine    : {os.uname().nodename if hasattr(os, 'uname') else 'Windows'}")
-    print(f"Current Working Dir    : {os.getcwd()}")
-    print(f"QWEN Endpoint Base     : {qwen_api_base}")
-    print(f"QWEN Key Set           : {'Yes' if qwen_api_key else 'No'}")
-    print(f"Event JSON Path        : {event_path}")
-
     if not event_path or not os.path.exists(event_path):
         print("Error: GITHUB_EVENT_PATH not found.", file=sys.stderr)
         sys.exit(1)
@@ -184,43 +128,38 @@ def main():
     pull_number = pr_data["number"]
     commit_id = pr_data["head"]["sha"]
 
-    print(f"Target Repository      : {repo_full}")
-    print(f"Pull Request Number    : #{pull_number}")
-    print(f"Target Head Commit SHA : {commit_id}")
-    print()
-
-    # 2. Inspect Available Authentication Tokens
-    pat_headers = inspect_token("UNITY_FRAMEWORK_PAT", pat_token, repo_full)
-    act_headers = inspect_token("ACTIONS_GITHUB_TOKEN", actions_token, repo_full)
-
-    # Determine Active & Fallback Credentials
-    if pat_headers:
-        primary_name, primary_headers = "UNITY_FRAMEWORK_PAT", pat_headers
-        fallback_name, fallback_headers = "ACTIONS_GITHUB_TOKEN", act_headers
-    else:
-        primary_name, primary_headers = "ACTIONS_GITHUB_TOKEN", act_headers
-        fallback_name, fallback_headers = None, None
-
-    if not primary_headers:
-        print("Fatal: Neither UNITY_FRAMEWORK_PAT nor ACTIONS_GITHUB_TOKEN is configured with valid headers.", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Active Primary Token   : {primary_name}")
-    print(f"Fallback Token Config  : {fallback_name or 'None'}")
-    print("==================================================\n")
-
     prompt_path = Path(__file__).parent / "system_prompt.md"
     if not prompt_path.exists():
         print(f"Error: {prompt_path} not found.", file=sys.stderr)
         sys.exit(1)
     system_prompt = prompt_path.read_text(encoding="utf-8")
 
+    primary_token = pat_token if pat_token else actions_token
+    primary_name = "UNITY_FRAMEWORK_PAT" if pat_token else "ACTIONS_GITHUB_TOKEN"
+    primary_headers = {
+        "Authorization": f"Bearer {primary_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "SchellGames-AI-Reviewer"
+    }
+
+    fallback_name = None
+    fallback_headers = None
+    if actions_token and actions_token != primary_token:
+        fallback_name = "ACTIONS_GITHUB_TOKEN"
+        fallback_headers = {
+            "Authorization": f"Bearer {actions_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "SchellGames-AI-Reviewer"
+        }
+
     qw_headers = {
         "Authorization": f"Bearer {qwen_api_key}",
         "Content-Type": "application/json"
     }
 
-    files_url = f"https://api.github.com/repos/{repo_full}/pulls/{pull_number}/files"
+    files_url = f"[https://api.github.com/repos/](https://api.github.com/repos/){repo_full}/pulls/{pull_number}/files"
     files = http_request(files_url, headers=primary_headers)
 
     all_findings = []
@@ -349,7 +288,7 @@ def main():
                 "body": comment_body
             }
 
-            comment_url = f"[https://api.github.com/repos/](https://api.github.com/repos/){repo_full}/pulls/{pull_number}/comments"
+            comment_url = f"https://api.github.com/repos/{repo_full}/pulls/{pull_number}/comments"
             if post_with_fallback(comment_url, payload, primary_name, primary_headers, fallback_name, fallback_headers):
                 print(f"Posted inline comment on {path}:{line_num}")
 
@@ -402,7 +341,7 @@ def main():
 
     summary_markdown = f"{verdict}\n\n{exec_summary}\n\n{findings_block}\n\n{what_changed_block}\n\n{reviewed_block}{unreviewed_block}"
 
-    issue_url = f"[https://api.github.com/repos/](https://api.github.com/repos/){repo_full}/issues/{pull_number}/comments"
+    issue_url = f"https://api.github.com/repos/{repo_full}/issues/{pull_number}/comments"
     if post_with_fallback(issue_url, {"body": summary_markdown}, primary_name, primary_headers, fallback_name, fallback_headers):
         print("Posted review summary comment to PR discussion.")
 
