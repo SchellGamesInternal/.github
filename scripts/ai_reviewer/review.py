@@ -13,13 +13,16 @@ ALLOWED_EXTENSIONS = {
     ".js", ".ts", ".py", ".json", ".bat", ".cmd", ".ps1", ".sh"
 }
 
+GH_BASE = "https://" + "api.github.com"
+
 
 def clean_url(url):
-    # Strip any accidental markdown formatting: [text](url)
-    url = url.strip()
-    url = re.sub(r'\[.*?\]\((https?://[^\)]+)\)', r'\1', url)
-    url = re.sub(r'^[\[\(]+', '', url) url = re.sub(r'[\]\)]+$', '', url)
-    return url.strip()
+    s = str(url).strip()
+    if "](" in s:
+        s = s.split("](")[-1].rstrip(")")
+    for ch in '[]() "\'':
+        s = s.replace(ch, "")
+    return s.strip()
 
 
 def http_request_raw(url, method="GET", headers=None, data=None):
@@ -108,7 +111,7 @@ def main():
     qwen_api_key = (os.environ.get("QWEN_API_KEY") or "").strip().strip('"').strip("'")
     qwen_api_base = (
             os.environ.get("QWEN_API_BASE")
-            or "[http://ai-research-mt.schellgames.local:8000/v1](http://ai-research-mt.schellgames.local:8000/v1)"
+            or "http://" + "ai-research-mt.schellgames.local:8000/v1"
     ).strip().strip('"').strip("'").rstrip("/")
 
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")
@@ -159,7 +162,7 @@ def main():
         "Content-Type": "application/json"
     }
 
-    files_url = f"[https://api.github.com/repos/](https://api.github.com/repos/){repo_full}/pulls/{pull_number}/files"
+    files_url = f"{GH_BASE}/repos/{repo_full}/pulls/{pull_number}/files"
     files = http_request(files_url, headers=primary_headers)
 
     all_findings = []
@@ -288,7 +291,7 @@ def main():
                 "body": comment_body
             }
 
-            comment_url = f"https://api.github.com/repos/{repo_full}/pulls/{pull_number}/comments"
+            comment_url = f"{GH_BASE}/repos/{repo_full}/pulls/{pull_number}/comments"
             if post_with_fallback(comment_url, payload, primary_name, primary_headers, fallback_name, fallback_headers):
                 print(f"Posted inline comment on {path}:{line_num}")
 
@@ -341,7 +344,7 @@ def main():
 
     summary_markdown = f"{verdict}\n\n{exec_summary}\n\n{findings_block}\n\n{what_changed_block}\n\n{reviewed_block}{unreviewed_block}"
 
-    issue_url = f"https://api.github.com/repos/{repo_full}/issues/{pull_number}/comments"
+    issue_url = f"{GH_BASE}/repos/{repo_full}/issues/{pull_number}/comments"
     if post_with_fallback(issue_url, {"body": summary_markdown}, primary_name, primary_headers, fallback_name, fallback_headers):
         print("Posted review summary comment to PR discussion.")
 
