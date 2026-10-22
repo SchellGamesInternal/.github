@@ -1,0 +1,30 @@
+name: Reusable AI Code Review
+
+on:
+  workflow_call:
+
+jobs:
+  ai-review:
+    runs-on: [self-hosted, upm-runner]
+    steps:
+      - name: Checkout Target Repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Schell Games AI Reviewer
+        uses: actions/checkout@v4
+        with:
+          repository: 'SchellGamesInternal/.github'
+          path: '.org-configs'
+          token: ${{ env.UNITY_FRAMEWORK_PAT }}
+
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Execute AI Code Review
+        run: python3 .org-configs/scripts/ai_reviewer/review.py
+        env:
+          GITHUB_TOKEN: ${{ env.UNITY_FRAMEWORK_PAT }}
+          QWEN_API_KEY: ${{ env.QWEN_API_KEY }}
+          QWEN_API_BASE: ${{ env.QWEN_API_BASE }}
