@@ -15,14 +15,7 @@ ALLOWED_EXTENSIONS = {
 
 
 def http_request(url, method="GET", headers=None, data=None):
-    # Sanitize URL against accidental markdown link syntax or brackets
-    url = url.strip()
-    md_match = re.match(r"^\[.*?\]\((https?://[^\)]+)\)", url)
-    if md_match:
-        url = md_match.group(1)
-    url = re.sub(r"^[\s\[\(]+", "", url) url = re.sub(r"[\s\]\)]+$", "", url)
-    url = url.strip()
-
+    url = url.strip().lstrip("[").rstrip("]")
     req = urllib.request.Request(url, method=method)
     if headers:
         for k, v in headers.items():
