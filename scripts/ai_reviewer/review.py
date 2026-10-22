@@ -10,7 +10,8 @@ from pathlib import Path
 
 ALLOWED_EXTENSIONS = {
     ".cs", ".cpp", ".c", ".h", ".hpp", ".shader", ".hlsl",
-    ".js", ".ts", ".py", ".json", ".bat", ".cmd", ".ps1", ".sh"
+    ".js", ".ts", ".py", ".json", ".bat", ".cmd", ".ps1", ".sh",
+    ".yml", ".yaml"
 }
 
 GH_BASE = "https://" + "api.github.com"
