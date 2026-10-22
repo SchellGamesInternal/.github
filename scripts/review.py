@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import base64
 import json
 import os
 import re
@@ -61,9 +62,22 @@ def parse_diff_hunk(patch):
 
 
 def main():
-    github_token = os.environ.get("GITHUB_TOKEN", "").strip()
-    qwen_api_key = os.environ.get("QWEN_API_KEY", "").strip()
-    qwen_api_base = os.environ.get("QWEN_API_BASE", "http://ai-research-mt.schellgames.local:8000/v1").rstrip("/")
+    github_token = (
+            os.environ.get("UNITY_FRAMEWORK_PAT")
+            or os.environ.get("GITHUB_TOKEN")
+            or ""
+    ).strip().strip('"').strip("'")
+
+    qwen_api_key = (
+            os.environ.get("QWEN_API_KEY")
+            or ""
+    ).strip().strip('"').strip("'")
+
+    qwen_api_base = (
+            os.environ.get("QWEN_API_BASE")
+            or "http://ai-research-mt.schellgames.local:8000/v1"
+    ).strip().strip('"').strip("'").rstrip("/")
+
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")
 
     if not event_path or not os.path.exists(event_path):
@@ -125,7 +139,6 @@ def main():
         raw_content = ""
         try:
             content_resp = http_request(f["contents_url"], headers=gh_headers)
-            import base64
             raw_content = base64.b64decode(content_resp.get("content", "")).decode("utf-8", errors="replace")
         except Exception as e:
             print(f"Notice: Full content unavailable for {path} ({e}). Using patch only.")

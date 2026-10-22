@@ -11,11 +11,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Checkout Schell Games AI Reviewer
-        uses: actions/checkout@v4
-        with:
-          repository: 'SchellGamesInternal/.github'
-          path: '.org-configs'
-          token: ${{ env.UNITY_FRAMEWORK_PAT }}
+        run: |
+          rm -rf .org-configs
+          git clone --depth 1 "https://${UNITY_FRAMEWORK_PAT}@github.com/SchellGamesInternal/.github.git" .org-configs
 
       - name: Setup Python Environment
         uses: actions/setup-python@v5
@@ -24,7 +22,3 @@ jobs:
 
       - name: Execute AI Code Review
         run: python3 .org-configs/scripts/ai_reviewer/review.py
-        env:
-          GITHUB_TOKEN: ${{ env.UNITY_FRAMEWORK_PAT }}
-          QWEN_API_KEY: ${{ env.QWEN_API_KEY }}
-          QWEN_API_BASE: ${{ env.QWEN_API_BASE }}
