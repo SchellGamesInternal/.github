@@ -14,6 +14,7 @@ jobs:
 
     steps:
       - name: Trigger Internal Jenkins Test Pipeline
+        shell: bash
         run: |
           # GITHUB_REPOSITORY is always populated as 'Owner/Repo' (e.g. SchellGamesInternal/VerdaccioTest)
           REPO_FULL="${GITHUB_REPOSITORY}"
