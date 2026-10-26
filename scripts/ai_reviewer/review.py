@@ -201,10 +201,14 @@ def main():
         else:
             numbered_file_context = "Full file unavailable. Rely on unified diff."
 
+        # Place full file context first to anchor attention before diff lines are read
         user_prompt = (
             f"File: {path}\n\n"
-            f"=== ANNOTATED UNIFIED DIFF (Shows [Line N] for new code) ===\n{annotated_diff}\n\n"
-            f"=== FULL FILE CONTENT (Line-Numbered) ===\n{numbered_file_context}"
+            f"=== FULL FILE CONTENT (Line-Numbered Context) ===\n{numbered_file_context}\n\n"
+            f"=== ANNOTATED UNIFIED DIFF (Lines to Review: [Line N]) ===\n{annotated_diff}\n\n"
+            f"CRITICAL INSTRUCTION: Review the lines marked with [Line N] strictly within the context of "
+            f"the surrounding code in the FULL FILE. Verify lines immediately following any modified 'if' "
+            f"statements or variable declarations before flagging missing logic or uninitialized variables."
         )
 
         qwen_body = {
@@ -236,12 +240,19 @@ def main():
         for iss in diff_issues:
             line_num = int(iss["line_number"])
             sev = iss.get("severity", "High")
+            suggested_fix = iss.get("suggested_fix", "")
+
+            # Drop no-op suggestions where the fix is identical to existing line
+            current_line_text = line_content_map.get(line_num, "").strip()
+            if suggested_fix.strip() and suggested_fix.strip() == current_line_text:
+                print(f"Skipping no-op comment on {path}:{line_num}")
+                continue
+
             if sev == "Critical":
                 critical_count += 1
             elif sev == "High":
                 high_count += 1
 
-            suggested_fix = iss.get("suggested_fix", "")
             match = re.search(r"([a-zA-Z0-9_]+)\s*\(", suggested_fix)
             if match and line_num in line_content_map:
                 sig = match.group(1)
@@ -252,7 +263,7 @@ def main():
                         line_num = line_num + 1
 
             orig_indent = indent_map.get(line_num, "")
-            if orig_indent and not suggested_fix.startswith(orig_indent):
+            if orig_indent and suggested_fix and not suggested_fix.startswith(orig_indent):
                 suggested_fix = orig_indent + suggested_fix.lstrip()
 
             clean_title = iss.get("title", "").strip("*[] ")
@@ -274,14 +285,14 @@ def main():
 
             desc_lines = iss.get("description", "").splitlines()
             quoted_desc = "\n".join(f"> {dl}" if dl.strip() else ">" for dl in desc_lines)
+
+            suggestion_block = f"\n\n```suggestion\n{suggested_fix}\n```" if suggested_fix.strip() else ""
             comment_body = (
                 f"> {alert_tag}\n"
                 f"> **{clean_title}**\n"
                 f">\n"
-                f"{quoted_desc}\n\n"
-                f"```suggestion\n"
-                f"{suggested_fix}\n"
-                f"```"
+                f"{quoted_desc}"
+                f"{suggestion_block}"
             )
 
             payload = {
