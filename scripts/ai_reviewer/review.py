@@ -106,6 +106,28 @@ def parse_diff_hunk(patch):
     return valid_lines, indent_map, line_content_map, "\n".join(annotated_lines)
 
 
+def is_redundant_guard_suggestion(line_num, suggested_fix, full_file_lines):
+    """Detects when an AI appends an inline exit (return/throw) to a line whose next line already contains it."""
+    if not suggested_fix or not full_file_lines:
+        return False
+
+    idx = line_num - 1
+    next_idx = line_num
+    if 0 <= next_idx < len(full_file_lines):
+        next_line = full_file_lines[next_idx].strip()
+        curr_line = full_file_lines[idx].strip() if 0 <= idx < len(full_file_lines) else ""
+        s_fix = suggested_fix.strip()
+
+        has_exit = next_line.startswith("return") or next_line.startswith("throw")
+        suggests_exit = "return" in s_fix or "throw" in s_fix
+        curr_had_no_exit = "return" not in curr_line and "throw" not in curr_line
+
+        if has_exit and suggests_exit and curr_had_no_exit:
+            return True
+
+    return False
+
+
 def main():
     pat_token = (os.environ.get("UNITY_FRAMEWORK_PAT") or "").strip().strip('"').strip("'")
     actions_token = (os.environ.get("ACTIONS_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
@@ -171,6 +193,7 @@ def main():
     all_summaries = []
     reviewed_files = []
     unreviewed_files = []
+    batched_comments = []
     critical_count = 0
     high_count = 0
 
@@ -187,28 +210,37 @@ def main():
         print(f"Analyzing: {path}")
 
         raw_content = ""
-        try:
-            content_resp = http_request(f["contents_url"], headers=primary_headers)
-            raw_content = base64.b64decode(content_resp.get("content", "")).decode("utf-8", errors="replace")
-        except Exception as e:
-            print(f"Notice: Full content unavailable for {path} ({e}). Using patch only.")
+        local_path = Path(path)
+        if local_path.is_file():
+            try:
+                raw_content = local_path.read_text(encoding="utf-8", errors="replace")
+                print(f"  Loaded {path} directly from local disk ({len(raw_content.splitlines())} lines).")
+            except Exception as e:
+                print(f"  Warning: Local read failed for {path}: {e}")
+
+        if not raw_content and "contents_url" in f:
+            try:
+                content_resp = http_request(f["contents_url"], headers=primary_headers)
+                raw_content = base64.b64decode(content_resp.get("content", "")).decode("utf-8", errors="replace")
+            except Exception as e:
+                print(f"Notice: Full content unavailable for {path} ({e}). Using patch only.")
 
         diff_lines, indent_map, line_content_map, annotated_diff = parse_diff_hunk(patch)
+        full_file_lines = raw_content.splitlines() if raw_content else []
 
-        if raw_content:
-            numbered_lines = [f"Line {idx + 1}: {line}" for idx, line in enumerate(raw_content.splitlines())]
+        if full_file_lines:
+            numbered_lines = [f"Line {idx + 1}: {line}" for idx, line in enumerate(full_file_lines)]
             numbered_file_context = "\n".join(numbered_lines)
         else:
             numbered_file_context = "Full file unavailable. Rely on unified diff."
 
-        # Place full file context first to anchor attention before diff lines are read
         user_prompt = (
             f"File: {path}\n\n"
             f"=== FULL FILE CONTENT (Line-Numbered Context) ===\n{numbered_file_context}\n\n"
             f"=== ANNOTATED UNIFIED DIFF (Lines to Review: [Line N]) ===\n{annotated_diff}\n\n"
             f"CRITICAL INSTRUCTION: Review the lines marked with [Line N] strictly within the context of "
-            f"the surrounding code in the FULL FILE. Verify lines immediately following any modified 'if' "
-            f"statements or variable declarations before flagging missing logic or uninitialized variables."
+            f"the surrounding code in the FULL FILE. In C#, an 'if' condition often places its body or return "
+            f"on the next line without braces. Verify the subsequent line before claiming an exit is missing."
         )
 
         qwen_body = {
@@ -242,10 +274,20 @@ def main():
             sev = iss.get("severity", "High")
             suggested_fix = iss.get("suggested_fix", "")
 
-            # Drop no-op suggestions where the fix is identical to existing line
+            # 1. Drop no-op suggestions where fix is identical to original line
             current_line_text = line_content_map.get(line_num, "").strip()
             if suggested_fix.strip() and suggested_fix.strip() == current_line_text:
                 print(f"Skipping no-op comment on {path}:{line_num}")
+                continue
+
+            # 2. Drop redundant guard clause suggestions
+            if is_redundant_guard_suggestion(line_num, suggested_fix, full_file_lines):
+                print(f"Skipping redundant guard clause suggestion on {path}:{line_num}")
+                continue
+
+            # 3. Ensure line is inside the PR diff hunk (GitHub rejects reviews with invalid line positions)
+            if line_num not in diff_lines:
+                print(f"Skipping comment on {path}:{line_num} (line not in PR diff hunk)")
                 continue
 
             if sev == "Critical":
@@ -274,9 +316,6 @@ def main():
                 "title": clean_title
             })
 
-            if line_num not in diff_lines:
-                continue
-
             alert_tag = {
                 "Critical": "[!CAUTION]",
                 "High": "[!WARNING]",
@@ -295,19 +334,15 @@ def main():
                 f"{suggestion_block}"
             )
 
-            payload = {
-                "commit_id": commit_id,
+            # Accumulate comments for the single batched review payload
+            batched_comments.append({
                 "path": path,
                 "line": line_num,
                 "side": "RIGHT",
                 "body": comment_body
-            }
+            })
 
-            comment_url = f"{GH_BASE}/repos/{repo_full}/pulls/{pull_number}/comments"
-            if post_with_fallback(comment_url, payload, primary_name, primary_headers, fallback_name, fallback_headers):
-                print(f"Posted inline comment on {path}:{line_num}")
-
-    # Build Summary Comment
+    # Build Summary Content
     if critical_count > 0:
         verdict = "### :red_circle: Changes requested"
     elif high_count > 0:
@@ -356,9 +391,42 @@ def main():
 
     summary_markdown = f"{verdict}\n\n{exec_summary}\n\n{findings_block}\n\n{what_changed_block}\n\n{reviewed_block}{unreviewed_block}"
 
-    issue_url = f"{GH_BASE}/repos/{repo_full}/issues/{pull_number}/comments"
-    if post_with_fallback(issue_url, {"body": summary_markdown}, primary_name, primary_headers, fallback_name, fallback_headers):
-        print("Posted review summary comment to PR discussion.")
+    # Submit Batched Review via Pull Request Reviews API (Generates 1 single email)
+    review_url = f"{GH_BASE}/repos/{repo_full}/pulls/{pull_number}/reviews"
+    review_payload = {
+        "commit_id": commit_id,
+        "body": summary_markdown,
+        "event": "COMMENT",
+        "comments": batched_comments
+    }
+
+    print(f"Submitting batched review with {len(batched_comments)} inline comment(s)...")
+    success = post_with_fallback(
+        review_url,
+        review_payload,
+        primary_name,
+        primary_headers,
+        fallback_name,
+        fallback_headers
+    )
+
+    # Fallback if a comment line was rejected by GitHub (HTTP 422)
+    if not success and batched_comments:
+        print("Batched review rejected. Retrying review submission without inline comments to preserve summary...")
+        fallback_payload = {
+            "commit_id": commit_id,
+            "body": summary_markdown + "\n\n*(Note: Inline diff comments could not be attached due to diff alignment)*",
+            "event": "COMMENT",
+            "comments": []
+        }
+        post_with_fallback(
+            review_url,
+            fallback_payload,
+            primary_name,
+            primary_headers,
+            fallback_name,
+            fallback_headers
+        )
 
     print("Review completed.")
 
