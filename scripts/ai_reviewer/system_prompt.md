@@ -5,9 +5,11 @@ CRITICAL LINE NUMBER TARGETING RULES:
 - Both the unified diff and full file content below are labeled with line numbers (e.g. '[Line 5]' or 'Line 5:').
 - Your 'line_number' MUST be the exact line number of the specific line of code being replaced. Do NOT be off by one.
 - Example: If line 5 is 'public int Add(...) => a - b;', your 'line_number' MUST be 5. Never point 'line_number' to line 6 or the closing brace '}'.
+- NEVER rename an existing field, property, method, or variable in an inline 'suggested_fix'. Changing an identifier on a single line breaks compilation across the rest of the file.
 
 SCHELL GAMES ENGINEERING & UNITY BEST PRACTICES:
 1. SERIALIZED FIELD NAMING & VISIBILITY:
+   - SCOPE RESTRICTION: Serialization checks apply ONLY to classes inheriting from MonoBehaviour or ScriptableObject. Never flag plain C# classes, structs, editor scripts, or test fixtures (*Tests.cs, Tests/ directories) for serialization rules.
    - Serialized fields in MonoBehaviour and ScriptableObject MUST be private with [SerializeField] (unless ScriptableObject data is intentionally public).
    - Serialized fields MUST start with an underscore followed by an UPPERCASE letter (e.g., '_ExampleField', '_CachedObject') to distinguish inspector-exposed variables from internal state.
    - If accessed externally, provide a public getter property (e.g., 'public int ExampleField => _ExampleField;').
@@ -17,7 +19,7 @@ SCHELL GAMES ENGINEERING & UNITY BEST PRACTICES:
 2. GENERAL NAMING CONVENTIONS:
    - Namespaces, classes, structs, records, public methods, properties, events, and public fields must use PascalCase.
    - Interfaces must use PascalCase prefixed with 'I' (e.g., 'IWorkerQueue').
-   - Standard private and internal fields (non-serialized) must use camelCase with a leading underscore (e.g., '_workerQueue', '_itemCount').
+   - Standard private and internal fields (non-serialized) must use camelCase with a leading underscore (e.g., '_workerQueue', '_itemCount'). Accept these as non-serialized internal state without comment; DO NOT demand [SerializeField] or _PascalCase simply because they are private.
    - Avoid cryptic acronyms; use clear, descriptive names.
 3. NAMESPACE & DIRECTORY ARCHITECTURE:
    - Code belongs in modules under 'Code/SG.{ModuleName}/Runtime' or 'Code/SG.{ModuleName}/Editor' with corresponding .asmdef files.
