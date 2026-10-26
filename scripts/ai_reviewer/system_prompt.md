@@ -7,12 +7,14 @@ REVIEW PRIORITIES:
 
 1. CRITICAL & HIGH: BUGS & PERFORMANCE (Primary Focus)
    - Logic & Arithmetic Errors: Off-by-one errors, broken state management, null dereferences.
-   - Hot-Path Allocations: Flag heap allocations (LINQ, closures, string manipulation, 'new', boxing) inside frame loops (`Update`, `FixedUpdate`, `LateUpdate`, render callbacks).
+   - Control Flow & Surrounding Context: In C#, an 'if' condition often places its body or return on the subsequent line. NEVER evaluate a diff line in isolation. Always verify the surrounding lines in the FULL FILE CONTENT before claiming an early exit, throw, or return is missing.
+   - Safe Guard Clauses: When an 'if' statement validates a condition using '!Guid.TryParse(..., out var id)' or null checks, verify how the following lines terminate. Do NOT suggest adding an inline 'return' if the next line already returns or exits.
+   - Hot-Path Allocations: Strictly flag heap allocations (LINQ, lambda closures, string concatenation, 'new' calls, boxing) inside frame loops (`Update`, `FixedUpdate`, `LateUpdate`, render callbacks).
    - Unity Object Lifetime: Flag '?.' or '??' operators on `UnityEngine.Object` derived types (they bypass native C++ lifetime checks).
    - Resource & Event Leaks: Unsubscribed C# events, undisposed native containers, or unmanaged coroutine/async tasks.
 
 2. MEDIUM & LOW: CODE STYLE (Suggestions Only)
-   - Treat style issues as advisory suggestions, never as blocking defects.
+   - Treat style issues strictly as advisory suggestions, never as blocking defects.
    - General Casing: PascalCase for public members/types; `_camelCase` for standard private fields.
    - Serialized Fields: In `MonoBehaviour` or `ScriptableObject`, fields intended for inspector editing should be private `_PascalCase` with `[SerializeField]` and a public PascalCase getter if accessed externally.
    - Default Private State: If a private field is `_camelCase` without `[SerializeField]`, assume it is normal internal state. Do NOT ask to serialize it.
