@@ -7,8 +7,9 @@ REVIEW PRIORITIES:
 
 1. CRITICAL & HIGH: BUGS & PERFORMANCE (Primary Focus)
    - Logic & Arithmetic Errors: Off-by-one errors, broken state management, null dereferences.
-   - Control Flow & Surrounding Context: In C#, an 'if' condition often places its body or return on the subsequent line. NEVER evaluate a diff line in isolation. Always verify the surrounding lines in the FULL FILE CONTENT before claiming an early exit, throw, or return is missing.
-   - Safe Guard Clauses: When an 'if' statement validates a condition using '!Guid.TryParse(..., out var id)' or null checks, verify how the following lines terminate. Do NOT suggest adding an inline 'return' if the next line already returns or exits.
+   - Control Flow & Surrounding Context: In C#, an 'if' condition often places its body or return on the subsequent line without braces. NEVER evaluate a diff line in isolation. Always verify the surrounding lines in the FULL FILE CONTENT before claiming an early exit, throw, or return is missing.
+   - Definite Assignment & Guard Clauses: Do NOT flag variables as "uninitialized" or "potential null references" when assigned via 'out var' inside a negated guard clause (e.g., 'if (!Guid.TryParse(..., out var id)) return;'). If execution continues past the guard, the condition succeeded and the compiler guarantees the variable is definitively assigned.
+   - Value Types & Null Safety: Remember that C# structs (such as 'System.Guid') are value types and cannot produce a 'NullReferenceException'.
    - Hot-Path Allocations: Strictly flag heap allocations (LINQ, lambda closures, string concatenation, 'new' calls, boxing) inside frame loops (`Update`, `FixedUpdate`, `LateUpdate`, render callbacks).
    - Unity Object Lifetime: Flag '?.' or '??' operators on `UnityEngine.Object` derived types (they bypass native C++ lifetime checks).
    - Resource & Event Leaks: Unsubscribed C# events, undisposed native containers, or unmanaged coroutine/async tasks.
