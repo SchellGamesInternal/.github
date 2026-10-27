@@ -188,6 +188,15 @@ def main():
     files_url = f"{GH_BASE}/repos/{repo_full}/pulls/{pull_number}/files"
     files = http_request(files_url, headers=primary_headers)
 
+    # Build cross-file change list to give the model global context
+    cross_file_overview = []
+    for file_info in files:
+        f_name = file_info.get("filename", "")
+        f_status = file_info.get("status", "modified")
+        f_changes = file_info.get("changes", 0)
+        cross_file_overview.append(f"- {f_name} ({f_status}, {f_changes} lines changed)")
+    all_files_summary_text = "\n".join(cross_file_overview)
+
     all_findings = []
     all_what_changed = []
     all_summaries = []
@@ -235,12 +244,19 @@ def main():
             numbered_file_context = "Full file unavailable. Rely on unified diff."
 
         user_prompt = (
-            f"File: {path}\n\n"
+            f"=== PULL REQUEST CONTEXT ===\n"
+            f"Title: {pr_title}\n"
+            f"Description:\n{pr_body if pr_body.strip() else '(No PR description provided)'}\n\n"
+            f"All Files Modified in this PR:\n{all_files_summary_text}\n\n"
+            f"=== CURRENT FILE BEING REVIEWED: {path} ===\n\n"
             f"=== FULL FILE CONTENT (Line-Numbered Context) ===\n{numbered_file_context}\n\n"
             f"=== ANNOTATED UNIFIED DIFF (Lines to Review: [Line N]) ===\n{annotated_diff}\n\n"
-            f"CRITICAL INSTRUCTION: Review the lines marked with [Line N] strictly within the context of "
-            f"the surrounding code in the FULL FILE. In C#, an 'if' condition often places its body or return "
-            f"on the next line without braces. Verify the subsequent line before claiming an exit is missing."
+            f"CRITICAL INSTRUCTIONS:\n"
+            f"1. Review the lines marked with [Line N] strictly within the context of the FULL FILE and the PR intent.\n"
+            f"2. For test files (under 'Tests/' or '*Tests.cs'), evaluate whether new or modified tests actually validate "
+            f"the stated PR objective, or if they produce false confidence by testing only in-memory states.\n"
+            f"3. In C#, an 'if' condition often places its body or return on the next line without braces. Verify the "
+            f"subsequent line before claiming an exit or return is missing."
         )
 
         qwen_body = {
@@ -271,6 +287,13 @@ def main():
         diff_issues = review_data.get("diff_issues", [])
         for iss in diff_issues:
             line_num = int(iss["line_number"])
+            start_line = iss.get("start_line")
+            if start_line is not None:
+                try:
+                    start_line = int(start_line)
+                except (ValueError, TypeError):
+                    start_line = None
+
             sev = iss.get("severity", "High")
             suggested_fix = iss.get("suggested_fix", "")
 
@@ -285,7 +308,7 @@ def main():
                 print(f"Skipping redundant guard clause suggestion on {path}:{line_num}")
                 continue
 
-            # 3. Ensure line is inside the PR diff hunk (GitHub rejects reviews with invalid line positions)
+            # 3. Ensure target line is in the PR diff hunk
             if line_num not in diff_lines:
                 print(f"Skipping comment on {path}:{line_num} (line not in PR diff hunk)")
                 continue
@@ -309,9 +332,10 @@ def main():
                 suggested_fix = orig_indent + suggested_fix.lstrip()
 
             clean_title = iss.get("title", "").strip("*[] ")
+            location_str = f"`{path}:{line_num}`" if not start_line else f"`{path}:{start_line}-{line_num}`"
             all_findings.append({
                 "file": path,
-                "line": line_num,
+                "location": location_str,
                 "severity": sev,
                 "title": clean_title
             })
@@ -334,13 +358,19 @@ def main():
                 f"{suggestion_block}"
             )
 
-            # Accumulate comments for the single batched review payload
-            batched_comments.append({
+            comment_obj = {
                 "path": path,
                 "line": line_num,
                 "side": "RIGHT",
                 "body": comment_body
-            })
+            }
+
+            # Enable multi-line comment if start_line is inside diff and strictly precedes line_num
+            if start_line and start_line in diff_lines and start_line < line_num:
+                comment_obj["start_line"] = start_line
+                comment_obj["start_side"] = "RIGHT"
+
+            batched_comments.append(comment_obj)
 
     # Build Summary Content
     if critical_count > 0:
@@ -363,7 +393,7 @@ def main():
     }
     for item in all_findings:
         badge = sev_badges.get(item["severity"], ":large_blue_circle: `Low`")
-        findings_list.append(f"- {badge} **{item['title']}** · `{item['file']}:{item['line']}`")
+        findings_list.append(f"- {badge} **{item['title']}** · {item['location']}")
 
     findings_block = (
             f"<details open>\n<summary><b>{len(findings_list)} open findings</b></summary>\n<br/>\n\n"
@@ -391,7 +421,9 @@ def main():
 
     summary_markdown = f"{verdict}\n\n{exec_summary}\n\n{findings_block}\n\n{what_changed_block}\n\n{reviewed_block}{unreviewed_block}"
 
-    # Submit Batched Review via Pull Request Reviews API (Generates 1 single email)
+    # Dry run support
+    dry_run = os.environ.get("DRY_RUN", "").lower() in ("true", "1", "yes")
+
     review_url = f"{GH_BASE}/repos/{repo_full}/pulls/{pull_number}/reviews"
     review_payload = {
         "commit_id": commit_id,
@@ -399,6 +431,17 @@ def main():
         "event": "COMMENT",
         "comments": batched_comments
     }
+
+    if dry_run:
+        print("\n" + "=" * 30 + " DRY RUN MODE ENABLED " + "=" * 30)
+        print(f"Target PR: #{pull_number} ({repo_full})")
+        print(f"Commit SHA: {commit_id}")
+        print(f"Inline Comments Prepared: {len(batched_comments)}")
+        print("\n--- BATCH REVIEW PAYLOAD ---")
+        print(json.dumps(review_payload, indent=2))
+        print("=" * 82)
+        print("DRY RUN COMPLETE: No requests were sent to GitHub.")
+        return
 
     print(f"Submitting batched review with {len(batched_comments)} inline comment(s)...")
     success = post_with_fallback(
