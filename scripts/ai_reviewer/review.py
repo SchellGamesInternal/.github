@@ -153,6 +153,8 @@ def main():
     repo_full = event_data["repository"]["full_name"]
     pull_number = pr_data["number"]
     commit_id = pr_data["head"]["sha"]
+    pr_title = pr_data.get("title", "")
+    pr_body = pr_data.get("body", "") or ""
 
     prompt_path = Path(__file__).parent / "system_prompt.md"
     if not prompt_path.exists():
