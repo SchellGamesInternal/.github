@@ -106,6 +106,34 @@ def parse_diff_hunk(patch):
     return valid_lines, indent_map, line_content_map, "\n".join(annotated_lines)
 
 
+def format_multiline_suggestion(suggested_fix, base_indent):
+    """Adjusts indentation across all lines of a multi-line suggestion block."""
+    if not suggested_fix:
+        return ""
+    lines = suggested_fix.rstrip().splitlines()
+    if not lines:
+        return ""
+
+    first_non_empty = next((l for l in lines if l.strip()), None)
+    if not first_non_empty:
+        return "\n".join(lines)
+
+    first_indent_match = re.match(r"^(\s*)", first_non_empty)
+    first_indent_len = len(first_indent_match.group(1)) if first_indent_match else 0
+
+    adjusted = []
+    for l in lines:
+        if not l.strip():
+            adjusted.append("")
+            continue
+        cur_indent_match = re.match(r"^(\s*)", l)
+        cur_indent_len = len(cur_indent_match.group(1)) if cur_indent_match else 0
+        rel_indent = max(0, cur_indent_len - first_indent_len)
+        adjusted.append(f"{base_indent}{' ' * rel_indent}{l.lstrip()}")
+
+    return "\n".join(adjusted)
+
+
 def is_redundant_guard_suggestion(line_num, suggested_fix, full_file_lines):
     """Detects when an AI appends an inline exit (return/throw) to a line whose next line already contains it."""
     if not suggested_fix or not full_file_lines:
@@ -190,7 +218,6 @@ def main():
     files_url = f"{GH_BASE}/repos/{repo_full}/pulls/{pull_number}/files"
     files = http_request(files_url, headers=primary_headers)
 
-    # Build cross-file change list to give the model global context
     cross_file_overview = []
     for file_info in files:
         f_name = file_info.get("filename", "")
@@ -255,8 +282,7 @@ def main():
             f"=== ANNOTATED UNIFIED DIFF (Lines to Review: [Line N]) ===\n{annotated_diff}\n\n"
             f"CRITICAL INSTRUCTIONS:\n"
             f"1. Review the lines marked with [Line N] strictly within the context of the FULL FILE and the PR intent.\n"
-            f"2. For test files (under 'Tests/' or '*Tests.cs'), evaluate whether new or modified tests actually validate "
-            f"the stated PR objective, or if they produce false confidence by testing only in-memory states.\n"
+            f"2. Provide concrete, multi-line replacement suggestions in 'suggested_fix' whenever applicable.\n"
             f"3. In C#, an 'if' condition often places its body or return on the next line without braces. Verify the "
             f"subsequent line before claiming an exit or return is missing."
         )
@@ -320,18 +346,10 @@ def main():
             elif sev == "High":
                 high_count += 1
 
-            match = re.search(r"([a-zA-Z0-9_]+)\s*\(", suggested_fix)
-            if match and line_num in line_content_map:
-                sig = match.group(1)
-                if sig not in line_content_map[line_num]:
-                    if (line_num - 1) in line_content_map and sig in line_content_map[line_num - 1]:
-                        line_num = line_num - 1
-                    elif (line_num + 1) in line_content_map and sig in line_content_map[line_num + 1]:
-                        line_num = line_num + 1
-
-            orig_indent = indent_map.get(line_num, "")
-            if orig_indent and suggested_fix and not suggested_fix.startswith(orig_indent):
-                suggested_fix = orig_indent + suggested_fix.lstrip()
+            # Format multi-line indentation relative to original base line
+            base_line = start_line if (start_line and start_line in indent_map) else line_num
+            orig_indent = indent_map.get(base_line, "")
+            formatted_fix = format_multiline_suggestion(suggested_fix, orig_indent)
 
             clean_title = iss.get("title", "").strip("*[] ")
             location_str = f"`{path}:{line_num}`" if not start_line else f"`{path}:{start_line}-{line_num}`"
@@ -351,7 +369,7 @@ def main():
             desc_lines = iss.get("description", "").splitlines()
             quoted_desc = "\n".join(f"> {dl}" if dl.strip() else ">" for dl in desc_lines)
 
-            suggestion_block = f"\n\n```suggestion\n{suggested_fix}\n```" if suggested_fix.strip() else ""
+            suggestion_block = f"\n\n```suggestion\n{formatted_fix}\n```" if formatted_fix else ""
             comment_body = (
                 f"> {alert_tag}\n"
                 f"> **{clean_title}**\n"
@@ -423,7 +441,6 @@ def main():
 
     summary_markdown = f"{verdict}\n\n{exec_summary}\n\n{findings_block}\n\n{what_changed_block}\n\n{reviewed_block}{unreviewed_block}"
 
-    # Dry run support
     dry_run = os.environ.get("DRY_RUN", "").lower() in ("true", "1", "yes")
 
     review_url = f"{GH_BASE}/repos/{repo_full}/pulls/{pull_number}/reviews"
