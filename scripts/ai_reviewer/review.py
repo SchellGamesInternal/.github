@@ -104,7 +104,6 @@ def parse_diff_hunk(patch):
 
 
 def format_multiline_suggestion(suggested_fix, base_indent):
-    """Adjusts indentation across all lines of a multi-line suggestion block."""
     if not suggested_fix:
         return ""
     lines = suggested_fix.rstrip().splitlines()
@@ -132,7 +131,6 @@ def format_multiline_suggestion(suggested_fix, base_indent):
 
 
 def is_redundant_guard_suggestion(line_num, suggested_fix, full_file_lines):
-    """Detects when an AI appends an inline exit (return/throw) to a line whose next line already contains it."""
     if not suggested_fix or not full_file_lines:
         return False
 
@@ -153,44 +151,46 @@ def is_redundant_guard_suggestion(line_num, suggested_fix, full_file_lines):
     return False
 
 
-def find_related_production_file(test_path):
-    """Locates and loads corresponding production source code for a given test file."""
-    test_file = Path(test_path)
-    name = test_file.name
-    if not ("test" in name.lower()):
-        return None, ""
+def find_companion_production_files(target_path, diff_content):
+    found_files = {}
+    target_name = Path(target_path).name.lower()
 
-    target_name = re.sub(r"(?i)tests?\.cs$", ".cs", name)
-    if target_name == name:
-        return None, ""
+    stem_candidate = re.sub(r"(?i)(?:_?tests?|_?fixtures?)\.cs$", "", target_name)
+    target_file_candidate = f"{stem_candidate}.cs" if stem_candidate != target_name else None
 
-    parts = list(test_file.parts)
-    for idx, part in enumerate(parts):
-        if part.lower() == "tests":
-            for alt in ["Runtime", "Scripts", "Editor", ""]:
-                candidate_parts = list(parts)
-                if alt:
-                    candidate_parts[idx] = alt
-                else:
-                    candidate_parts.pop(idx)
-                candidate_parts[-1] = target_name
-                candidate_path = Path(*candidate_parts)
-                if candidate_path.is_file():
-                    try:
-                        content = candidate_path.read_text(encoding="utf-8", errors="replace")
-                        return str(candidate_path), content
-                    except Exception:
-                        pass
+    symbols = set(re.findall(r"\b([A-Z][a-zA-Z0-9_]{2,})\b", diff_content))
+    ignored_keywords = {
+        "Assert", "Test", "SetUp", "TearDown", "IsTrue", "IsFalse",
+        "AreEqual", "That", "UnityTest", "IEnumerator", "GameObject",
+        "String", "Int32", "Single", "Boolean", "Object", "List", "Dictionary"
+    }
+    symbols -= ignored_keywords
 
-    for match in Path(".").rglob(target_name):
-        if "test" not in str(match).lower() and match.is_file():
-            try:
-                content = match.read_text(encoding="utf-8", errors="replace")
-                return str(match), content
-            except Exception:
-                pass
+    try:
+        for p in Path(".").rglob("*.cs"):
+            p_parts_lower = [part.lower() for part in p.parts]
+            if any(t in part for part in p_parts_lower for t in ["test", "fixture", "editor/tests"]):
+                continue
 
-    return None, ""
+            file_stem = p.stem.lower()
+            file_name = p.name.lower()
+
+            if target_file_candidate and file_name == target_file_candidate:
+                if str(p) not in found_files:
+                    found_files[str(p)] = p.read_text(encoding="utf-8", errors="replace")
+
+            for sym in list(symbols):
+                if file_stem == sym.lower():
+                    if str(p) not in found_files:
+                        found_files[str(p)] = p.read_text(encoding="utf-8", errors="replace")
+                    symbols.remove(sym)
+
+            if len(found_files) >= 3:
+                break
+    except Exception as e:
+        print(f"  Notice: Error during companion file scan: {e}")
+
+    return found_files
 
 
 def main():
@@ -252,7 +252,6 @@ def main():
         "Content-Type": "application/json"
     }
 
-    # Fetch Commit History
     commits_url = f"{GH_BASE}/repos/{repo_full}/pulls/{pull_number}/commits"
     commit_messages = []
     try:
@@ -263,9 +262,8 @@ def main():
                 commit_messages.append(f"- {msg.splitlines()[0]}")
     except Exception as e:
         print(f"Notice: Could not fetch commit history: {e}")
-    commits_summary_text = "\n".join(commit_messages) if commit_messages else "(No commit messages available)"
+    commits_summary_text = "\n".join(commit_messages) if commit_messages else "(No commit messages provided)"
 
-    # Fetch PR Files
     files_url = f"{GH_BASE}/repos/{repo_full}/pulls/{pull_number}/files"
     files = http_request(files_url, headers=primary_headers)
 
@@ -280,6 +278,7 @@ def main():
     all_what_changed = []
     all_summaries = []
     all_confidence_notes = []
+    all_deliberations = []
     reviewed_files = []
     unreviewed_files = []
     batched_comments = []
@@ -324,7 +323,6 @@ def main():
         else:
             numbered_file_context = "Full file unavailable. Rely on unified diff."
 
-        # Companion PR Diffs
         other_diff_blocks = []
         for other_name, other_patch in all_diffs_map.items():
             if other_name != path:
@@ -336,21 +334,22 @@ def main():
                 other_diff_blocks.append(f"--- {other_name} ---\n{truncated_patch}")
         global_diffs_text = "\n\n".join(other_diff_blocks) if other_diff_blocks else "(No other files modified in this PR)"
 
-        # Companion Production Code
-        rel_path, rel_content = find_related_production_file(path)
-        if rel_content:
-            rel_lines = rel_content.splitlines()
-            if len(rel_lines) > 300:
-                rel_content_text = "\n".join(rel_lines[:300]) + "\n... [file truncated for length]"
+        companion_files = find_companion_production_files(path, patch)
+        companion_blocks = []
+        for comp_path, comp_content in companion_files.items():
+            comp_lines = comp_content.splitlines()
+            if len(comp_lines) > 300:
+                truncated_comp = "\n".join(comp_lines[:300]) + "\n... [file truncated for length]"
             else:
-                rel_content_text = rel_content
-            related_file_block = (
-                f"=== COMPANION PRODUCTION CODE ({rel_path}) ===\n"
-                f"Note: This is the implementation tested by this file. Cross-reference signatures and contracts.\n"
-                f"{rel_content_text}\n\n"
+                truncated_comp = comp_content
+            companion_blocks.append(
+                f"--- COMPANION PRODUCTION FILE: {comp_path} ---\n"
+                f"Note: This is the production implementation. Cross-reference signatures, parameter names, and XML doc contracts.\n"
+                f"{truncated_comp}"
             )
-        else:
-            related_file_block = ""
+            print(f"  [Context Injection] Injected companion production file: {comp_path} ({len(comp_lines)} lines)")
+
+        companion_code_text = "\n\n".join(companion_blocks) + "\n\n" if companion_blocks else ""
 
         user_prompt = (
             f"=== PULL REQUEST CONTEXT ===\n"
@@ -358,14 +357,14 @@ def main():
             f"Description:\n{pr_body if pr_body.strip() else '(No PR description provided)'}\n\n"
             f"Commit History:\n{commits_summary_text}\n\n"
             f"All Files Modified in this PR (Unified Diffs):\n{global_diffs_text}\n\n"
-            f"{related_file_block}"
-            f"=== FILE BEING REVIEWED: {path} ===\n\n"
+            f"{companion_code_text}"
+            f"=== TARGET FILE BEING REVIEWED: {path} ===\n\n"
             f"=== MODIFICATIONS IN THIS FILE (Unified Diff) ===\n{patch}\n\n"
             f"=== FULL FILE CONTENT (Line-Numbered) ===\n{numbered_file_context}\n\n"
             f"CRITICAL REVIEW DIRECTIVES:\n"
-            f"1. Staff-Level Quality: Only flag issues if you have 100% confidence they represent a defect or unhandled failure.\n"
-            f"2. Complexity & Ambiguity: If any logic is too complex or ambiguous to determine certainty, describe it in 'confidence_notes' and suggest a Copilot review instead of guessing.\n"
-            f"3. Concrete Multi-Line Suggestions: Provide complete, executable replacements in 'suggested_fix' whenever applicable."
+            f"1. Context Verification: Before evaluating a call in a test file, verify the method's actual signature, parameter names, and XML documentation from the companion production code.\n"
+            f"2. High Confidence Only: Only report issues that represent genuine bugs or unhandled failures. Never speculate or question intentional boundary parameters.\n"
+            f"3. Concrete Multi-Line Suggestions: Every reported issue MUST provide an executable code fix in 'suggested_fix'."
         )
 
         qwen_body = {
@@ -397,6 +396,10 @@ def main():
         if conf_note:
             all_confidence_notes.append((path, conf_note))
 
+        delib_note = (review_data.get("deliberation") or "").strip()
+        if delib_note:
+            all_deliberations.append((path, delib_note))
+
         diff_issues = review_data.get("diff_issues", [])
         for iss in diff_issues:
             line_num = int(iss["line_number"])
@@ -408,14 +411,16 @@ def main():
                     start_line = None
 
             sev = iss.get("severity", "High")
-            suggested_fix = iss.get("suggested_fix", "")
+            suggested_fix = (iss.get("suggested_fix") or "").strip()
 
-            # 1. Skip no-op suggestions
-            current_line_text = line_content_map.get(line_num, "").strip()
-            if suggested_fix.strip() and suggested_fix.strip() == current_line_text:
+            if not suggested_fix:
+                print(f"Skipping non-actionable comment on {path}:{line_num} (no suggested_fix provided)")
                 continue
 
-            # 2. Skip redundant guard clauses
+            current_line_text = line_content_map.get(line_num, "").strip()
+            if suggested_fix == current_line_text:
+                continue
+
             if is_redundant_guard_suggestion(line_num, suggested_fix, full_file_lines):
                 continue
 
@@ -424,7 +429,6 @@ def main():
             elif sev == "High":
                 high_count += 1
 
-            # Format multi-line indentation
             base_indent = ""
             if 0 <= line_num - 1 < len(full_file_lines):
                 match = re.match(r"^(\s*)", full_file_lines[line_num - 1])
@@ -448,9 +452,8 @@ def main():
 
             desc_lines = iss.get("description", "").splitlines()
             quoted_desc = "\n".join(f"> {dl}" if dl.strip() else ">" for dl in desc_lines)
-            suggestion_block = f"\n\n```suggestion\n{formatted_fix}\n```" if formatted_fix else ""
+            suggestion_block = f"\n\n```suggestion\n{formatted_fix}\n```"
 
-            # Check if line is within PR diff hunks
             if line_num in diff_lines:
                 comment_body = (
                     f"> {alert_tag}\n"
@@ -489,7 +492,7 @@ def main():
                         "body": comment_body
                     })
                 else:
-                    code_preview = f"\n```csharp\n{formatted_fix}\n```" if formatted_fix else ""
+                    code_preview = f"\n```csharp\n{formatted_fix}\n```"
                     file_level_findings.append(
                         f"#### {alert_tag} `{path}:{line_num}` — {clean_title}\n\n"
                         f"{iss.get('description', '')}\n{code_preview}"
@@ -556,7 +559,21 @@ def main():
     if file_level_findings:
         broader_section = "\n\n### Broader File & Context Findings\n\n" + "\n\n---\n\n".join(file_level_findings)
 
-    summary_markdown = f"{verdict}\n\n{exec_summary}\n\n{findings_block}\n\n{what_changed_block}\n\n{reviewed_block}{unreviewed_block}{confidence_block}{broader_section}"
+    thinking_sub_blocks = []
+    for p, thought in all_deliberations:
+        safe_thought = thought[:1500] + ("\n... [truncated for length]" if len(thought) > 1500 else "")
+        quoted_thought = "\n".join(f"> {l}" if l.strip() else ">" for l in safe_thought.splitlines())
+        thinking_sub_blocks.append(
+            f"<details>\n<summary><code>{p}</code></summary>\n\n{quoted_thought}\n\n</details>"
+        )
+
+    thinking_block = (
+            f"\n\n<details>\n<summary>🧠 <b>Reviewer Deliberation & Thought Process</b> (Click to expand)</summary>\n<br/>\n\n"
+            + "\n\n".join(thinking_sub_blocks)
+            + "\n\n</details>"
+    ) if thinking_sub_blocks else ""
+
+    summary_markdown = f"{verdict}\n\n{exec_summary}\n\n{findings_block}\n\n{what_changed_block}\n\n{reviewed_block}{unreviewed_block}{confidence_block}{broader_section}{thinking_block}"
 
     dry_run = os.environ.get("DRY_RUN", "").lower() in ("true", "1", "yes")
 
