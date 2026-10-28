@@ -11,7 +11,7 @@ from pathlib import Path
 ALLOWED_EXTENSIONS = {
     ".cs", ".cpp", ".c", ".h", ".hpp", ".shader", ".hlsl",
     ".js", ".ts", ".py", ".json", ".bat", ".cmd", ".ps1", ".sh",
-    ".yml", ".yaml", ".Jenkinsfile"
+    ".yml", ".yaml", ".Jenkinsfile", ".asmdef", ".asmref"
 }
 
 GH_BASE = "https://" + "api.github.com"
@@ -149,6 +149,21 @@ def is_redundant_guard_suggestion(line_num, suggested_fix, full_file_lines):
             return True
 
     return False
+
+
+def find_enclosing_asmdef(target_path):
+    """Walks up directory hierarchy from target file to find its controlling .asmdef."""
+    cur = Path(target_path).parent
+    while cur != cur.parent:
+        asmdefs = list(cur.glob("*.asmdef"))
+        if asmdefs:
+            try:
+                content = asmdefs[0].read_text(encoding="utf-8", errors="replace")
+                return str(asmdefs[0]), content
+            except Exception:
+                pass
+        cur = cur.parent
+    return None, ""
 
 
 def find_companion_production_files(target_path, diff_content):
@@ -334,6 +349,18 @@ def main():
                 other_diff_blocks.append(f"--- {other_name} ---\n{truncated_patch}")
         global_diffs_text = "\n\n".join(other_diff_blocks) if other_diff_blocks else "(No other files modified in this PR)"
 
+        # Search for controlling .asmdef in directory hierarchy
+        asmdef_path, asmdef_content = find_enclosing_asmdef(path)
+        asmdef_block = ""
+        if asmdef_content:
+            asmdef_block = (
+                f"=== ENCLOSING ASSEMBLY DEFINITION ({asmdef_path}) ===\n"
+                f"Note: This asmdef governs assembly references and versionDefines for this file.\n"
+                f"{asmdef_content}\n\n"
+            )
+            print(f"  [Context Injection] Found controlling asmdef: {asmdef_path}")
+
+        # Search for companion production classes
         companion_files = find_companion_production_files(path, patch)
         companion_blocks = []
         for comp_path, comp_content in companion_files.items():
@@ -357,6 +384,7 @@ def main():
             f"Description:\n{pr_body if pr_body.strip() else '(No PR description provided)'}\n\n"
             f"Commit History:\n{commits_summary_text}\n\n"
             f"All Files Modified in this PR (Unified Diffs):\n{global_diffs_text}\n\n"
+            f"{asmdef_block}"
             f"{companion_code_text}"
             f"=== TARGET FILE BEING REVIEWED: {path} ===\n\n"
             f"=== MODIFICATIONS IN THIS FILE (Unified Diff) ===\n{patch}\n\n"
@@ -413,12 +441,8 @@ def main():
             sev = iss.get("severity", "High")
             suggested_fix = (iss.get("suggested_fix") or "").strip()
 
-            if not suggested_fix:
-                print(f"Skipping non-actionable comment on {path}:{line_num} (no suggested_fix provided)")
-                continue
-
             current_line_text = line_content_map.get(line_num, "").strip()
-            if suggested_fix == current_line_text:
+            if suggested_fix and suggested_fix == current_line_text:
                 continue
 
             if is_redundant_guard_suggestion(line_num, suggested_fix, full_file_lines):
@@ -452,7 +476,7 @@ def main():
 
             desc_lines = iss.get("description", "").splitlines()
             quoted_desc = "\n".join(f"> {dl}" if dl.strip() else ">" for dl in desc_lines)
-            suggestion_block = f"\n\n```suggestion\n{formatted_fix}\n```"
+            suggestion_block = f"\n\n```suggestion\n{formatted_fix}\n```" if formatted_fix else ""
 
             if line_num in diff_lines:
                 comment_body = (
@@ -492,7 +516,7 @@ def main():
                         "body": comment_body
                     })
                 else:
-                    code_preview = f"\n```csharp\n{formatted_fix}\n```"
+                    code_preview = f"\n```csharp\n{formatted_fix}\n```" if formatted_fix else ""
                     file_level_findings.append(
                         f"#### {alert_tag} `{path}:{line_num}` — {clean_title}\n\n"
                         f"{iss.get('description', '')}\n{code_preview}"
